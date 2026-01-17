@@ -1,15 +1,21 @@
 import mlflow
 import mlflow.sklearn
+from lightgbm import LGBMRegressor
+from xgboost import XGBRegressor
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression , ElasticNet
 
 from src.automl.evaluate import evaluate
 
 
 MODEL_REGISTRY = {
     "RandomForest": RandomForestRegressor,
-    "LinearRegression": LinearRegression
+    "LinearRegression": LinearRegression,
+    "ElasticNet": ElasticNet,
+    "XGBoost": XGBRegressor,
+    "LightGBM": LGBMRegressor
 }
+
 
 
 def run_automl(models_config, X_train, X_test, y_train, y_test):
