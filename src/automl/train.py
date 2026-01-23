@@ -5,6 +5,9 @@ from src.automl.data_loader import load_dataset
 from src.automl.preprocessor import preprocess
 from src.automl.automl_engine import run_automl
 from src.llm.reasoning import reason_about_models
+from src.llm.prompt_builder import build_model_selection_prompt
+from src.llm.mock_llm import mock_llm_response
+
 
 
 
@@ -57,6 +60,20 @@ def train_from_config(config_path: str) -> dict:
     # 4. Log decision
         mlflow.log_metric("best_r2", best_score)
         mlflow.log_param("best_model", best_name)
+
+        prompt = build_model_selection_prompt(
+    dataset_profile,
+    [m["name"] for m in automl_cfg["models"]]
+)
+
+    llm_response = mock_llm_response(
+    dataset_profile,
+    automl_cfg["models"]
+)
+
+    mlflow.log_text(prompt, artifact_file="llm_prompt.txt")
+    mlflow.log_text(llm_response, artifact_file="llm_response.txt")
+
 
     return {
 "best_model": best_name,
