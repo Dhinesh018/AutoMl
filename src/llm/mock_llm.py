@@ -1,20 +1,25 @@
-def mock_llm_response(dataset_profile: dict, candidate_models: list):
-    response = []
+def mock_llm_decision(dataset_profile: dict, candidate_models: list):
+    selected = []
+    skipped = []
 
-    if dataset_profile["num_rows"] < 200:
-        response.append(
-            "The dataset is small, so simpler models like LinearRegression and ElasticNet are preferred."
-        )
-        response.append(
-            "Tree-based boosting models may overfit due to limited data."
-        )
-    else:
-        response.append(
-            "The dataset is sufficiently large to support complex models like XGBoost and LightGBM."
-        )
+    n_rows = dataset_profile["num_rows"]
 
-    response.append(
-        "Multiple models will be evaluated, and the best-performing one will be selected using validation metrics."
-    )
+    for model in candidate_models:
+        name = model["name"]
 
-    return "\n".join(response)
+        if n_rows < 200 and name in ["XGBoost", "LightGBM"]:
+            skipped.append(
+                f"Skipped {name}: dataset too small ({n_rows} rows)"
+            )
+        else:
+            selected.append(model)
+
+    response = {
+        "selected_models": selected,
+        "skipped_models": skipped,
+        "summary": (
+            "Model selection was adjusted based on dataset size and complexity."
+        )
+    }
+
+    return response
