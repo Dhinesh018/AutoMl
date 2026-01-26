@@ -30,7 +30,7 @@ def train_from_config(config_path: str) -> dict:
 
     automl_cfg = config["automl"]
 
-    with mlflow.start_run(run_name="AutoML_Run"):
+    with mlflow.start_run(run_name="AutoML_Run") as run:
 
         # 1. Log dataset profile
         mlflow.log_text(
@@ -62,8 +62,10 @@ def train_from_config(config_path: str) -> dict:
         mlflow.log_metric("best_r2", best_score)
         mlflow.log_param("best_model", best_name)
 
+        run_id = run.info.run_id
+
     # outside MLflow run, but inside function
     return {
         "best_model": best_name,
-        "best_score": best_score
+        "best_score": best_score,"run_id": run_id
     }
