@@ -17,13 +17,15 @@ MODEL_REGISTRY = {
 }
 
 
+MODEL_NAME = "llm_automl_tabular_model"
 
-def run_automl(models_config, X_train, X_test, y_train, y_test):
+def run_automl(models, X_train, X_test, y_train, y_test):
+
     best_model = None
     best_score = float("-inf")
     best_name = None
 
-    for model_cfg in models_config:
+    for model_cfg in models:
         model_name = model_cfg["name"]
         params = model_cfg.get("params", {})
 
@@ -40,7 +42,12 @@ def run_automl(models_config, X_train, X_test, y_train, y_test):
                 mlflow.log_metric(k, v)
 
             mlflow.log_params(params)
-            mlflow.sklearn.log_model(model, artifact_path="model")
+            mlflow.sklearn.log_model(
+    model,
+    artifact_path="model",
+    registered_model_name=MODEL_NAME
+)
+
 
             if metrics["r2"] > best_score:
                 best_score = metrics["r2"]
