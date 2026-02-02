@@ -2,17 +2,33 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import mlflow
 import pandas as pd
-from mlflow.tracking import MlflowClient
-
+from mlflow.exceptions import MlflowException
 
 from src.automl.train import train_from_config
 
+# ---------------- APP ----------------
 app = FastAPI(
     title="LLM-Augmented AutoML Assistant",
     version="0.1.0"
 )
 
+# ---------------- CONSTANTS ----------------
+MODEL_NAME = "llm_automl_tabular_model"
+MODEL_STAGE = "Production"
 
+# ---------------- LOAD MODEL ON STARTUP ----------------
+def load_model():
+    try:
+        model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
+        return mlflow.pyfunc.load_model(model_uri)
+    except MlflowException:
+        raise RuntimeError(
+            f"No model found in stage '{MODEL_STAGE}' for {MODEL_NAME}"
+        )
+
+model = load_model()
+
+# ---------------- SCHEMAS ----------------
 class TrainRequest(BaseModel):
     config_path: str
 
@@ -23,15 +39,6 @@ class TrainResponse(BaseModel):
     run_id: str
 
 
-@app.post("/train", response_model=TrainResponse)
-def train_model(req: TrainRequest):
-    try:
-        result = train_from_config(req.config_path)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 class PredictRequest(BaseModel):
     features: dict
 
@@ -39,32 +46,29 @@ class PredictRequest(BaseModel):
 class PredictResponse(BaseModel):
     prediction: float
     model_name: str
-    model_version: int
+    model_stage: str
 
-MODEL_NAME = "llm_automl_tabular_model"
-@app.post("/predict", response_model=PredictResponse)
+
+# ---------------- ENDPOINTS ----------------
+@app.post("/train", response_model=TrainResponse)
+def train_model(req: TrainRequest):
+    try:
+        return train_from_config(req.config_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
     try:
-        model_uri = f"models:/{MODEL_NAME}/Latest"
-        model = mlflow.pyfunc.load_model(model_uri)
-
-        input_df = pd.DataFrame([req.features])
-        prediction = model.predict(input_df)[0]
-
-        client = MlflowClient()
-        latest_versions = client.get_latest_versions(
-            name=MODEL_NAME,
-            stages=["None", "Production", "Staging"]
-        )
-
-        model_version = latest_versions[0].version
+        df = pd.DataFrame([req.features])
+        prediction = model.predict(df)[0]
 
         return {
             "prediction": float(prediction),
             "model_name": MODEL_NAME,
-            "model_version": model_version
+            "model_stage": MODEL_STAGE
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
