@@ -16,6 +16,17 @@ app = FastAPI(
 MODEL_NAME = "llm_automl_tabular_model"
 MODEL_STAGE = "Production"
 
+EXPECTED_FEATURES = [
+    "LotArea",
+    "OverallQual",
+    "OverallCond",
+    "YearBuilt",
+    "GrLivArea",
+    "FullBath",
+    "GarageCars"
+]
+
+
 # ---------------- LOAD MODEL ON STARTUP ----------------
 def load_model():
     try:
@@ -61,7 +72,25 @@ def train_model(req: TrainRequest):
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
     try:
-        df = pd.DataFrame([req.features])
+        incoming_features = req.features
+
+        # Check missing fields
+        missing = set(EXPECTED_FEATURES) - set(incoming_features.keys())
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing features: {missing}"
+            )
+
+        # Check unexpected fields
+        extra = set(incoming_features.keys()) - set(EXPECTED_FEATURES)
+        if extra:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unexpected features: {extra}"
+            )
+
+        df = pd.DataFrame([incoming_features])
         prediction = model.predict(df)[0]
 
         return {
@@ -72,3 +101,17 @@ def predict(req: PredictRequest):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+    with mlflow.start_run(run_name="prediction_log"):
+        mlflow.log_params(incoming_features)
+        mlflow.log_metric("prediction", float(prediction))
+
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy",
+        "model_name": MODEL_NAME,
+        "model_stage": MODEL_STAGE
+    }
