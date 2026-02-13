@@ -6,6 +6,8 @@ from mlflow.exceptions import MlflowException
 
 from src.automl.train import train_from_config
 
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
+
 # ---------------- APP ----------------
 app = FastAPI(
     title="LLM-Augmented AutoML Assistant",
@@ -98,14 +100,15 @@ def predict(req: PredictRequest):
             "model_name": MODEL_NAME,
             "model_stage": MODEL_STAGE
         }
+        with mlflow.start_run(run_name="prediction_log"):
+            mlflow.log_params(incoming_features)
+            mlflow.log_metric("prediction", float(prediction))
+
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-    with mlflow.start_run(run_name="prediction_log"):
-        mlflow.log_params(incoming_features)
-        mlflow.log_metric("prediction", float(prediction))
-
+    
 
 
 @app.get("/health")

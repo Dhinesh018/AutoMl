@@ -9,6 +9,7 @@ from src.automl.preprocessor import preprocess
 from src.automl.automl_engine import run_automl
 from src.llm.mock_llm import mock_llm_decision
 
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
 MODEL_NAME = "llm_automl_tabular_model"
 
 
@@ -72,14 +73,15 @@ def train_from_config(config_path: str) -> dict:
 
         # 5. Log model artifact
         mlflow.sklearn.log_model(
-            sk_model=best_model,
-            artifact_path="model"
-        )
+    sk_model=best_model,
+    name ="model",
+    input_example=X_train.iloc[:1]
+)
 
         run_id = run.info.run_id
 
     # 6. Register model OUTSIDE the run
-    client = MlflowClient()
+    
     registered = mlflow.register_model(
         model_uri=f"runs:/{run_id}/model",
         name=MODEL_NAME
