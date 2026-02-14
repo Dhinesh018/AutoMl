@@ -5,8 +5,9 @@ import pandas as pd
 from mlflow.exceptions import MlflowException
 
 from src.automl.train import train_from_config
+from src.config import MLFLOW_TRACKING_URI, MODEL_NAME, MODEL_STAGE
 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 # ---------------- APP ----------------
 app = FastAPI(
@@ -15,9 +16,6 @@ app = FastAPI(
 )
 
 # ---------------- CONSTANTS ----------------
-MODEL_NAME = "llm_automl_tabular_model"
-MODEL_STAGE = "Production"
-
 EXPECTED_FEATURES = [
     "LotArea",
     "OverallQual",
@@ -31,15 +29,22 @@ EXPECTED_FEATURES = [
 
 # ---------------- LOAD MODEL ON STARTUP ----------------
 def load_model():
+    """Load model from Production stage. Returns None if not found."""
     try:
         model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
-        return mlflow.pyfunc.load_model(model_uri)
+        loaded_model = mlflow.pyfunc.load_model(model_uri)
+        
+        from mlflow.tracking import MlflowClient
+        client = MlflowClient()
+        model_versions = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
+        version = int(model_versions[0].version) if model_versions else 0
+        
+        return loaded_model, version
     except MlflowException:
-        raise RuntimeError(
-            f"No model found in stage '{MODEL_STAGE}' for {MODEL_NAME}"
-        )
+        # Don't crash - return None instead
+        return None, None
 
-model = load_model()
+model, model_version = load_model()
 
 # ---------------- SCHEMAS ----------------
 class TrainRequest(BaseModel):
@@ -60,6 +65,7 @@ class PredictResponse(BaseModel):
     prediction: float
     model_name: str
     model_stage: str
+    model_version: int
 
 
 # ---------------- ENDPOINTS ----------------
@@ -73,6 +79,13 @@ def train_model(req: TrainRequest):
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
+    # Check if model exists
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No model in Production stage. Train a model first using /train endpoint."
+        )
+    
     try:
         incoming_features = req.features
 
@@ -95,20 +108,21 @@ def predict(req: PredictRequest):
         df = pd.DataFrame([incoming_features])
         prediction = model.predict(df)[0]
 
-        return {
-            "prediction": float(prediction),
-            "model_name": MODEL_NAME,
-            "model_stage": MODEL_STAGE
-        }
+        # Log before returning
         with mlflow.start_run(run_name="prediction_log"):
             mlflow.log_params(incoming_features)
             mlflow.log_metric("prediction", float(prediction))
 
+        # Return prediction with version
+        return {
+            "prediction": float(prediction),
+            "model_name": MODEL_NAME,
+            "model_stage": MODEL_STAGE,
+            "model_version": model_version
+        }
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-    
 
 
 @app.get("/health")

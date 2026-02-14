@@ -32,10 +32,17 @@ def run_automl(models, X_train, X_test, y_train, y_test):
         model_cls = MODEL_REGISTRY[model_name]
         model = model_cls(**params)
 
+    with mlflow.start_run(run_name=model_name, nested=True):
         model.fit(X_train, y_train)
         preds = model.predict(X_test)
 
         metrics = evaluate(y_test, preds)
+
+        for k, v in metrics.items():
+            mlflow.log_metric(k, v)
+
+        mlflow.log_params(params)
+        # ✅ NO mlflow.sklearn.log_model HERE!
 
         if metrics["r2"] > best_score:
             best_score = metrics["r2"]
