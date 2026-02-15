@@ -7,7 +7,7 @@ from src.automl.data_profiler import profile_dataset
 from src.automl.data_loader import load_dataset
 from src.automl.preprocessor import preprocess
 from src.automl.automl_engine import run_automl
-from src.llm.mock_llm import mock_llm_decision
+from src.llm.real_llm import get_llm_decision
 from src.config import MLFLOW_TRACKING_URI, MODEL_NAME
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -46,7 +46,7 @@ def train_from_config(config_path: str) -> dict:
         )
 
         # 2. LLM decides which models to run
-        llm_output = mock_llm_decision(
+        llm_output = get_llm_decision(
             dataset_profile,
             automl_cfg["models"]
         )
