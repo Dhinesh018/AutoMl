@@ -8,6 +8,8 @@ myenv/
 
 # MLflow
 mlruns/
+mlflow_data/
+
 
 # OS
 .DS_Store
