@@ -15,3 +15,6 @@ mlflow_artifacts/
 mlruns/
 .env
 *.log
+
+mlflow_data/
+
