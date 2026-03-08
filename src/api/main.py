@@ -6,6 +6,8 @@ from mlflow.exceptions import MlflowException
 
 from src.automl.train import train_from_config
 from src.config import MLFLOW_TRACKING_URI, MODEL_NAME, MODEL_STAGE
+from fastapi import UploadFile, Form
+from src.api.upload import upload_dataset
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
@@ -44,7 +46,12 @@ def load_model():
         # Don't crash - return None instead
         return None, None
 
-model, model_version = load_model()
+try:
+    model, model_version = load_model()
+    print(f"✅ Loaded model version {model_version} from Production")
+except Exception as e:
+    print(f"⚠️  No Production model found: {e}")
+    model, model_version = None, None
 
 # ---------------- SCHEMAS ----------------
 class TrainRequest(BaseModel):
@@ -75,6 +82,24 @@ def train_model(req: TrainRequest):
         return train_from_config(req.config_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/datasets/upload")
+async def upload_dataset_endpoint(
+    file: UploadFile,
+    target_column: str = Form(...)
+):
+    """
+    Upload a dataset for training
+    
+    Parameters:
+    - file: CSV or Excel file
+    - target_column: Name of the target column
+    
+    Returns:
+    - dataset_id: Unique identifier for the dataset
+    - Dataset statistics and profile
+    """
+    return await upload_dataset(file, target_column)
 
 
 @app.post("/predict", response_model=PredictResponse)
