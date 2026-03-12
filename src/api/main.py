@@ -3,11 +3,22 @@ from src.jobs.training_jobs import run_training_job
 from src.jobs.job_store import job_store
 import uuid
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Request
+import time
+from pydantic import BaseModel ,Field
 import mlflow
 import pandas as pd
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
+from src.utils.exceptions import (
+    DatasetNotFoundError,
+    ModelNotFoundError,
+    JobNotFoundError,
+    NoProductionModelError
+)
+from fastapi.responses import JSONResponse
+import traceback
+from datetime import datetime
 
 from src.automl.train import train_from_config
 from src.config import MLFLOW_TRACKING_URI, MODEL_NAME, MODEL_STAGE
@@ -21,7 +32,49 @@ app = FastAPI(
     title="LLM-Augmented AutoML Assistant",
     version="0.1.0"
 )
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """
+    Catch-all exception handler for unexpected errors
+    """
+    error_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Log the full error
+    print(f"❌ ERROR [{error_id}]: {str(exc)}")
+    print(traceback.format_exc())
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "InternalServerError",
+            "message": "An unexpected error occurred",
+            "error_id": error_id,
+            "detail": str(exc),
+            "suggestion": "Contact support with error_id if issue persists"
+        }
+    )
 
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    Log all incoming requests
+    """
+    start_time = time.time()
+    
+    # Log request
+    print(f"➡️  {request.method} {request.url.path}")
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Calculate duration
+    duration = time.time() - start_time
+    
+    # Log response
+    print(f"⬅️  {request.method} {request.url.path} - {response.status_code} ({duration:.2f}s)")
+    
+    return response
 # ---------------- CONSTANTS ----------------
 EXPECTED_FEATURES = [
     "LotArea",
@@ -87,6 +140,7 @@ async def trigger_training(
     target_column: str,
     background_tasks: BackgroundTasks
 ):
+    # ... rest of code
     """
     Trigger training job with uploaded dataset
     
@@ -104,10 +158,7 @@ async def trigger_training(
     dataset_files = list(upload_dir.glob(f"{dataset_id}.*"))
     
     if not dataset_files:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Dataset {dataset_id} not found. Upload dataset first using /datasets/upload"
-        )
+        raise DatasetNotFoundError(dataset_id)
     
     # Create job
     job_id = f"job_{uuid.uuid4().hex[:12]}"
@@ -189,11 +240,8 @@ async def promote_model(
     """
     valid_stages = ["Production", "Staging", "Archived"]
     
-    if stage not in valid_stages:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid stage. Must be one of: {valid_stages}"
-        )
+    if not versions:
+        raise ModelNotFoundError(version)
     
     try:
         # Check if version exists
@@ -377,10 +425,7 @@ async def get_training_status(job_id: str):
     job = job_store.get_job(job_id)
     
     if not job:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Job {job_id} not found"
-        )
+        raise JobNotFoundError(job_id)
     
     return job
 
@@ -419,10 +464,7 @@ async def upload_dataset_endpoint(
 def predict(req: PredictRequest):
     # Check if model exists
     if model is None:
-        raise HTTPException(
-            status_code=503,
-            detail="No model in Production stage. Train a model first using /train endpoint."
-        )
+        raise NoProductionModelError()
     
     try:
         incoming_features = req.features

@@ -4,6 +4,11 @@ import pandas as pd
 import hashlib
 from datetime import datetime
 from typing import Optional
+from src.utils.exceptions import (
+    InvalidFileTypeError,
+    FileTooLargeError,
+    InvalidTargetColumnError
+)
 
 UPLOAD_DIR = Path("/app/data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -24,20 +29,20 @@ async def upload_dataset(
     # 1. Validate file extension
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Allowed: {ALLOWED_EXTENSIONS}"
-        )
+        raise InvalidFileTypeError(
+            filename=file.filename,
+            allowed_types=list(ALLOWED_EXTENSIONS)
+    )
     
     # 2. Read file contents
     contents = await file.read()
     
     # 3. Check file size
     if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Max: {MAX_FILE_SIZE / 1024 / 1024}MB"
-        )
+        raise FileTooLargeError(
+            size_mb=len(contents) / 1024 / 1024,
+            max_size_mb=MAX_FILE_SIZE // 1024 // 1024
+    )
     
     # 4. Generate unique dataset_id
     file_hash = hashlib.md5(contents).hexdigest()[:8]
@@ -65,10 +70,10 @@ async def upload_dataset(
     # 7. Validate target column exists
     if target_column not in df.columns:
         file_path.unlink()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Target column '{target_column}' not found. Available: {list(df.columns)}"
-        )
+        raise InvalidTargetColumnError(
+        target_column=target_column,
+        available_columns=list(df.columns)
+    )
     
     # 8. Check for empty dataset
     if len(df) == 0:
