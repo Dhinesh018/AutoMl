@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import mlflow
 import pandas as pd
 from mlflow.exceptions import MlflowException
+from mlflow.tracking import MlflowClient
 
 from src.automl.train import train_from_config
 from src.config import MLFLOW_TRACKING_URI, MODEL_NAME, MODEL_STAGE
@@ -128,6 +129,243 @@ async def trigger_training(
         "target_column": target_column
     }
 
+
+# Initialize MLflow client
+mlflow_client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+
+
+@app.get("/models/versions")
+async def list_model_versions():
+    """
+    List all registered model versions
+    
+    Returns version history with stages and metadata
+    """
+    try:
+        versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
+        
+        if not versions:
+            return {
+                "model_name": MODEL_NAME,
+                "total_versions": 0,
+                "versions": [],
+                "message": "No models registered yet. Train a model first."
+            }
+        
+        version_list = []
+        for v in sorted(versions, key=lambda x: int(x.version), reverse=True):
+            version_list.append({
+                "version": int(v.version),
+                "stage": v.current_stage,
+                "created_at": v.creation_timestamp,
+                "updated_at": v.last_updated_timestamp,
+                "run_id": v.run_id,
+                "description": v.description or ""
+            })
+        
+        return {
+            "model_name": MODEL_NAME,
+            "total_versions": len(version_list),
+            "versions": version_list
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/models/promote/{version}")
+async def promote_model(
+    version: int,
+    stage: str = "Production"
+):
+    """
+    Promote a model version to a specific stage
+    
+    Parameters:
+    - version: Model version number
+    - stage: Target stage (Production, Staging, or Archived)
+    
+    Automatically archives current Production model
+    """
+    valid_stages = ["Production", "Staging", "Archived"]
+    
+    if stage not in valid_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid stage. Must be one of: {valid_stages}"
+        )
+    
+    try:
+        # Check if version exists
+        # Check if version exists
+        all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
+        versions = [v for v in all_versions if int(v.version) == version]
+        if not versions:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model version {version} not found"
+            )
+        
+        # If promoting to Production, archive current Production
+        if stage == "Production":
+            current_prod = mlflow_client.get_latest_versions(
+                MODEL_NAME,
+                stages=["Production"]
+            )
+            
+            for model in current_prod:
+                if int(model.version) != version:
+                    mlflow_client.transition_model_version_stage(
+                        name=MODEL_NAME,
+                        version=model.version,
+                        stage="Archived"
+                    )
+        
+        # Promote the new version
+        mlflow_client.transition_model_version_stage(
+            name=MODEL_NAME,
+            version=version,
+            stage=stage
+        )
+        
+        return {
+            "message": f"Model version {version} promoted to {stage}",
+            "model_name": MODEL_NAME,
+            "version": version,
+            "stage": stage,
+            "note": "Restart API to load the new Production model" if stage == "Production" else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/models/rollback")
+async def rollback_model():
+    """
+    Rollback to the previous Production model
+    
+    Finds the most recently archived model and promotes it
+    """
+    try:
+        # Get all versions
+        all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
+        
+        if not all_versions:
+            raise HTTPException(
+                status_code=404,
+                detail="No models found to rollback to"
+            )
+        
+        # Find archived versions (previously in Production)
+        archived = [v for v in all_versions if v.current_stage == "Archived"]
+        
+        if not archived:
+            raise HTTPException(
+                status_code=404,
+                detail="No archived models to rollback to"
+            )
+        
+        # Get most recently updated archived model
+        latest_archived = max(archived, key=lambda v: v.last_updated_timestamp)
+        
+        # Archive current Production
+        current_prod = mlflow_client.get_latest_versions(
+            MODEL_NAME,
+            stages=["Production"]
+        )
+        
+        for model in current_prod:
+            mlflow_client.transition_model_version_stage(
+                name=MODEL_NAME,
+                version=model.version,
+                stage="Archived"
+            )
+        
+        # Promote archived to Production
+        mlflow_client.transition_model_version_stage(
+            name=MODEL_NAME,
+            version=latest_archived.version,
+            stage="Production"
+        )
+        
+        return {
+            "message": "Rollback successful",
+            "model_name": MODEL_NAME,
+            "version": int(latest_archived.version),
+            "stage": "Production",
+            "note": "Restart API to load the rolled-back model"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/models/compare")
+async def compare_models(version1: int, version2: int):
+    """
+    Compare two model versions
+    
+    Shows metrics and parameters side-by-side
+    """
+    try:
+        def get_model_details(version: int):
+            # Get model version info
+             # Get model version info
+            all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
+            versions = [v for v in all_versions if int(v.version) == version]
+            if not versions:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Model version {version} not found"
+                )
+            
+            model_version = versions[0]
+            
+            # Get run details
+            run = mlflow_client.get_run(model_version.run_id)
+            
+            return {
+                "version": version,
+                "stage": model_version.current_stage,
+                "created_at": model_version.creation_timestamp,
+                "run_id": model_version.run_id,
+                "metrics": run.data.metrics,
+                "params": run.data.params
+            }
+        
+        model1 = get_model_details(version1)
+        model2 = get_model_details(version2)
+        
+        # Determine winner based on best_r2 or r2 metric
+        r2_key = "best_r2" if "best_r2" in model1["metrics"] else "r2"
+        
+        if r2_key in model1["metrics"] and r2_key in model2["metrics"]:
+            winner = version1 if model1["metrics"][r2_key] > model2["metrics"][r2_key] else version2
+            r2_diff = abs(model1["metrics"][r2_key] - model2["metrics"][r2_key])
+        else:
+            winner = None
+            r2_diff = None
+        
+        return {
+            "model_name": MODEL_NAME,
+            "version1": model1,
+            "version2": model2,
+            "comparison": {
+                "winner": winner,
+                "metric_used": r2_key,
+                "r2_difference": round(r2_diff, 4) if r2_diff else None
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/train/status/{job_id}")
 async def get_training_status(job_id: str):
