@@ -2,8 +2,12 @@ from fastapi import BackgroundTasks
 from src.jobs.training_jobs import run_training_job
 from src.jobs.job_store import job_store
 import uuid
+import psutil
+import platform
 from fastapi import FastAPI, HTTPException
 from fastapi import Request
+from src.utils.logger import logger
+import uuid
 import time
 from pydantic import BaseModel ,Field
 import mlflow
@@ -35,13 +39,17 @@ app = FastAPI(
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """
-    Catch-all exception handler for unexpected errors
+    Catch-all exception handler with logging
     """
     error_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    request_id = getattr(request.state, 'request_id', 'unknown')
     
     # Log the full error
-    print(f"❌ ERROR [{error_id}]: {str(exc)}")
-    print(traceback.format_exc())
+    logger.error(
+        f"[{request_id}] ❌ ERROR [{error_id}]: {str(exc)}",
+        exc_info=True,
+        extra={"request_id": request_id, "error_id": error_id}
+    )
     
     return JSONResponse(
         status_code=500,
@@ -49,32 +57,57 @@ async def global_exception_handler(request, exc):
             "error": "InternalServerError",
             "message": "An unexpected error occurred",
             "error_id": error_id,
+            "request_id": request_id,
             "detail": str(exc),
             "suggestion": "Contact support with error_id if issue persists"
         }
     )
 
-
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """
-    Log all incoming requests
+    Log all incoming requests with detailed info
     """
+    # Generate request ID
+    request_id = str(uuid.uuid4())[:8]
+    
+    # Store in request state
+    request.state.request_id = request_id
+    
     start_time = time.time()
     
-    # Log request
-    print(f"➡️  {request.method} {request.url.path}")
+    # Log incoming request
+    logger.info(
+        f"[{request_id}] ➡️  {request.method} {request.url.path}",
+        extra={"request_id": request_id}
+    )
     
-    # Process request
-    response = await call_next(request)
-    
-    # Calculate duration
-    duration = time.time() - start_time
-    
-    # Log response
-    print(f"⬅️  {request.method} {request.url.path} - {response.status_code} ({duration:.2f}s)")
-    
-    return response
+    try:
+        # Process request
+        response = await call_next(request)
+        
+        # Calculate duration
+        duration = time.time() - start_time
+        
+        # Log response
+        logger.info(
+            f"[{request_id}] ⬅️  {request.method} {request.url.path} - {response.status_code} ({duration:.2f}s)",
+            extra={"request_id": request_id}
+        )
+        
+        # Add request ID to response headers
+        response.headers["X-Request-ID"] = request_id
+        
+        return response
+        
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(
+            f"[{request_id}] ❌ {request.method} {request.url.path} - ERROR ({duration:.2f}s): {str(e)}",
+            exc_info=True,
+            extra={"request_id": request_id}
+        )
+        raise
 # ---------------- CONSTANTS ----------------
 EXPECTED_FEATURES = [
     "LotArea",
@@ -140,29 +173,19 @@ async def trigger_training(
     target_column: str,
     background_tasks: BackgroundTasks
 ):
-    # ... rest of code
     """
     Trigger training job with uploaded dataset
-    
-    Parameters:
-    - dataset_id: ID from /datasets/upload
-    - target_column: Name of target column
-    
-    Returns:
-    - job_id: Use this to check training status
     """
     
-    # Validate dataset exists
-    from pathlib import Path
-    upload_dir = Path("/app/data/uploads")
-    dataset_files = list(upload_dir.glob(f"{dataset_id}.*"))
+    logger.info(f"Training request - dataset_id: {dataset_id}, target: {target_column}")
     
-    if not dataset_files:
-        raise DatasetNotFoundError(dataset_id)
+    # ... existing validation code ...
     
     # Create job
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     job = job_store.create_job(job_id, dataset_id, target_column)
+    
+    logger.info(f"Created training job: {job_id}")
     
     # Start background task
     background_tasks.add_task(
@@ -172,6 +195,8 @@ async def trigger_training(
         target_column
     )
     
+    logger.info(f"Started background training job: {job_id}")
+    
     return {
         "job_id": job_id,
         "status": "pending",
@@ -179,7 +204,6 @@ async def trigger_training(
         "dataset_id": dataset_id,
         "target_column": target_column
     }
-
 
 # Initialize MLflow client
 mlflow_client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
@@ -506,9 +530,65 @@ def predict(req: PredictRequest):
 
 
 @app.get("/health")
-def health():
-    return {
-        "status": "healthy",
-        "model_name": MODEL_NAME,
-        "model_stage": MODEL_STAGE
-    }
+async def health_check():
+    """
+    Comprehensive health check with system metrics
+    """
+    try:
+        # Check if model is loaded
+        model_status = "loaded" if model is not None else "not_loaded"
+        
+        # System metrics
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        # Count training jobs
+        all_jobs = job_store.list_jobs()
+        job_stats = {
+            "total": len(all_jobs),
+            "pending": len([j for j in all_jobs if j["status"] == "pending"]),
+            "running": len([j for j in all_jobs if j["status"] == "running"]),
+            "completed": len([j for j in all_jobs if j["status"] == "completed"]),
+            "failed": len([j for j in all_jobs if j["status"] == "failed"])
+        }
+        
+        health_data = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "model": {
+                "status": model_status,
+                "version": model_version if model_version else None,
+                "name": MODEL_NAME
+            },
+            "system": {
+                "platform": platform.system(),
+                "python_version": platform.python_version(),
+                "cpu_percent": psutil.cpu_percent(interval=1),
+                "memory": {
+                    "total_mb": round(memory.total / 1024 / 1024, 2),
+                    "used_mb": round(memory.used / 1024 / 1024, 2),
+                    "percent": memory.percent
+                },
+                "disk": {
+                    "total_gb": round(disk.total / 1024 / 1024 / 1024, 2),
+                    "used_gb": round(disk.used / 1024 / 1024 / 1024, 2),
+                    "percent": disk.percent
+                }
+            },
+            "training_jobs": job_stats,
+            "mlflow": {
+                "tracking_uri": MLFLOW_TRACKING_URI
+            }
+        }
+        
+        logger.info("Health check performed")
+        
+        return health_data
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }

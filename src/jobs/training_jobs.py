@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from src.automl.train import train_from_config
 from src.jobs.job_store import job_store, JobStatus
+from src.utils.logger import logger
 
 
 async def run_training_job(
@@ -15,6 +16,8 @@ async def run_training_job(
     Updates job status as it progresses
     """
     
+    logger.info(f"[{job_id}] Training job started - dataset: {dataset_id}")
+    
     try:
         # Mark as running
         job_store.update_job(
@@ -25,14 +28,18 @@ async def run_training_job(
             current_step="Validating dataset..."
         )
         
+        logger.info(f"[{job_id}] Validating dataset...")
+        
         # Find dataset file
         upload_dir = Path("/app/data/uploads")
         dataset_files = list(upload_dir.glob(f"{dataset_id}.*"))
         
         if not dataset_files:
+            logger.error(f"[{job_id}] Dataset not found: {dataset_id}")
             raise FileNotFoundError(f"Dataset {dataset_id} not found")
         
         dataset_path = str(dataset_files[0])
+        logger.info(f"[{job_id}] Dataset found: {dataset_path}")
         
         job_store.update_job(
             job_id,
@@ -68,8 +75,12 @@ async def run_training_job(
             current_step="Starting AutoML training..."
         )
         
+        logger.info(f"[{job_id}] Starting AutoML training...")
+        
         # Run training
         result = train_from_config(config_path)
+        
+        logger.info(f"[{job_id}] Training completed - Best model: {result['best_model']}, R²: {result['best_score']:.4f}")
         
         job_store.update_job(
             job_id,
@@ -96,9 +107,11 @@ async def run_training_job(
             }
         )
         
-        print(f"✅ Job {job_id} completed successfully!")
+        logger.info(f"[{job_id}] ✅ Job completed successfully!")
         
     except Exception as e:
+        logger.error(f"[{job_id}] ❌ Training failed: {str(e)}", exc_info=True)
+        
         # Mark as failed
         job_store.update_job(
             job_id,
@@ -107,4 +120,3 @@ async def run_training_job(
             current_step="Training failed",
             error=str(e)
         )
-        print(f"❌ Job {job_id} failed: {e}")
