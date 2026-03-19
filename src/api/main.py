@@ -23,6 +23,7 @@ from src.utils.exceptions import (
 from fastapi.responses import JSONResponse
 import traceback
 from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.automl.train import train_from_config
 from src.config import MLFLOW_TRACKING_URI, MODEL_NAME, MODEL_STAGE
@@ -82,6 +83,16 @@ Upload Dataset → LLM Analyzes & Selects Models → Train Subset
         "name": "MIT License",
     },
 )
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """
