@@ -67,8 +67,18 @@ def train_from_config(config_path: str) -> dict:
             y_test
         )
 
-        # 4. Log metrics
-        mlflow.log_metric("best_r2", best_score)
+        # Calculate additional metrics from best model
+        from sklearn.metrics import mean_squared_error, mean_absolute_error
+        import numpy as np
+        
+        y_pred = best_model.predict(X_test)
+        best_rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        best_mae = mean_absolute_error(y_test, y_pred)
+
+        # 4. Log all metrics
+        mlflow.log_metric("best_r2", best_score)    
+        mlflow.log_metric("best_rmse", best_rmse)
+        mlflow.log_metric("best_mae", best_mae)
         mlflow.log_param("best_model", best_name)
 
         # 5. Log model artifact
@@ -90,7 +100,7 @@ def train_from_config(config_path: str) -> dict:
 
     model_version = registered.version
 
-    # 7. ✅ AUTO-PROMOTE TO PRODUCTION (NEW!)
+    # 7. ✅ AUTO-PROMOTE TO PRODUCTION
     print(f"🚀 Auto-promoting model version {model_version} to Production...")
     
     # Archive old Production model (if exists)
@@ -118,8 +128,10 @@ def train_from_config(config_path: str) -> dict:
     return {
         "best_model": best_name,
         "best_score": best_score,
+        "best_rmse": best_rmse,
+        "best_mae": best_mae,
         "model_name": MODEL_NAME,
         "model_version": model_version,
         "run_id": run_id,
-        "stage": "Production"  # ✅ Added this
+        "stage": "Production"
     }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import UploadPage from './pages/UploadPage'
 import TrainingPage from './pages/TrainingPage'
+import ModelsPage from './pages/ModelsPage'
 
 function App() {
   const [currentPage, setCurrentPage] = useState('upload')
@@ -18,6 +19,7 @@ function App() {
       background: 'var(--color-bg-secondary)'
     }}>
       
+      {/* Navigation Header */}
       <nav style={{
         background: 'var(--color-bg-primary)',
         borderBottom: '1px solid var(--color-border)',
@@ -69,9 +71,27 @@ function App() {
           >
             🚀 Training
           </button>
+
+          <button
+            onClick={() => setCurrentPage('models')}
+            style={{
+              padding: '8px 16px',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: currentPage === 'models' ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+              background: currentPage === 'models' ? 'var(--color-primary-light)' : 'transparent',
+              border: 'none',
+              borderRadius: 'var(--radius-md)',
+              cursor: 'pointer',
+              transition: 'all var(--transition-fast)'
+            }}
+          >
+            📦 Models
+          </button>
         </div>
       </nav>
 
+      {/* Page Content */}
       {currentPage === 'upload' && (
         <UploadPage onUploadSuccess={handleUploadSuccess} />
       )}
@@ -81,6 +101,10 @@ function App() {
           datasetId={uploadedDataset?.dataset_id}
           targetColumn={uploadedDataset?.target_column}
         />
+      )}
+
+      {currentPage === 'models' && (
+        <ModelsPage />
       )}
       
     </div>

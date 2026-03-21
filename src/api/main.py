@@ -312,7 +312,6 @@ async def list_model_versions():
     
     Use this before promoting or rolling back models.
     """
-    # ... your existing implementation ...
     try:
         versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
         
@@ -320,30 +319,63 @@ async def list_model_versions():
             return {
                 "model_name": MODEL_NAME,
                 "total_versions": 0,
-                "versions": [],
+                "models": [],  # Changed from 'versions' to 'models'
+                "production_version": None,
                 "message": "No models registered yet. Train a model first."
             }
         
         version_list = []
+        production_version = None
+        
         for v in sorted(versions, key=lambda x: int(x.version), reverse=True):
-            version_list.append({
+            # Get the run to fetch metrics
+            try:
+                run = mlflow_client.get_run(v.run_id)
+                metrics = run.data.metrics
+                params = run.data.params
+                
+                # Try different metric names
+                # Try different metric names, default to None if not found
+                r2_score = metrics.get('best_r2', metrics.get('r2', metrics.get('r2_score', None)))
+                rmse = metrics.get('best_rmse', metrics.get('rmse', None))  # Will be None - that's OK
+                mae = metrics.get('best_mae', metrics.get('mae', None))
+
+                # Algorithm from parameters
+                algorithm = params.get('best_model', params.get('model_name', 'Unknown'))
+                
+            except Exception as e:
+                print(f"⚠️ Failed to get metrics for version {v.version}: {e}")
+                r2_score = None
+                rmse = None
+                algorithm = None
+            
+            version_data = {
                 "version": int(v.version),
                 "stage": v.current_stage,
+                "algorithm": algorithm,
+                "r2_score": r2_score,
+                "rmse": rmse,
                 "created_at": v.creation_timestamp,
                 "updated_at": v.last_updated_timestamp,
                 "run_id": v.run_id,
                 "description": v.description or ""
-            })
+            }
+            
+            version_list.append(version_data)
+            
+            # Track production version
+            if v.current_stage == "Production":
+                production_version = int(v.version)
         
         return {
             "model_name": MODEL_NAME,
             "total_versions": len(version_list),
-            "versions": version_list
+            "models": version_list,  # Changed from 'versions' to 'models'
+            "production_version": production_version
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post(
     "/models/promote/{version}",
@@ -370,17 +402,19 @@ async def promote_model(
     
     ⚠️ **Remember to restart the API** after promoting to Production!
     """
-    # ... your existing implementation ...
     valid_stages = ["Production", "Staging", "Archived"]
     
-    if not versions:
-        raise ModelNotFoundError(version)
+    if stage not in valid_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid stage. Must be one of: {valid_stages}"
+        )
     
     try:
         # Check if version exists
-        # Check if version exists
         all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
         versions = [v for v in all_versions if int(v.version) == version]
+        
         if not versions:
             raise HTTPException(
                 status_code=404,
@@ -405,7 +439,7 @@ async def promote_model(
         # Promote the new version
         mlflow_client.transition_model_version_stage(
             name=MODEL_NAME,
-            version=version,
+            version=str(version),  # Convert to string
             stage=stage
         )
         
@@ -421,7 +455,6 @@ async def promote_model(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post(
     "/models/rollback",
@@ -521,11 +554,9 @@ async def compare_models(
     Use this before promoting a new model to confirm it actually improves 
     on the current Production model.
     """
-    # ... your existing implementation ...
     try:
         def get_model_details(version: int):
             # Get model version info
-             # Get model version info
             all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
             versions = [v for v in all_versions if int(v.version) == version]
             if not versions:
@@ -538,45 +569,50 @@ async def compare_models(
             
             # Get run details
             run = mlflow_client.get_run(model_version.run_id)
+            metrics = run.data.metrics
+            params = run.data.params
+            
+            # Extract metrics with fallbacks
+            r2 = metrics.get('best_r2', metrics.get('r2', None))
+            rmse = metrics.get('best_rmse', metrics.get('rmse', None))
+            mae = metrics.get('best_mae', metrics.get('mae', None))
+            algorithm = params.get('best_model', params.get('model_name', 'Unknown'))
             
             return {
                 "version": version,
+                "algorithm": algorithm,
+                "r2_score": r2,
+                "rmse": rmse,
+                "mae": mae,
                 "stage": model_version.current_stage,
                 "created_at": model_version.creation_timestamp,
                 "run_id": model_version.run_id,
-                "metrics": run.data.metrics,
-                "params": run.data.params
             }
         
         model1 = get_model_details(version1)
         model2 = get_model_details(version2)
         
-        # Determine winner based on best_r2 or r2 metric
-        r2_key = "best_r2" if "best_r2" in model1["metrics"] else "r2"
+        # Determine winner based on R² score
+        winner = None
+        if model1["r2_score"] is not None and model2["r2_score"] is not None:
+            winner = version1 if model1["r2_score"] > model2["r2_score"] else version2
         
-        if r2_key in model1["metrics"] and r2_key in model2["metrics"]:
-            winner = version1 if model1["metrics"][r2_key] > model2["metrics"][r2_key] else version2
-            r2_diff = abs(model1["metrics"][r2_key] - model2["metrics"][r2_key])
-        else:
-            winner = None
-            r2_diff = None
-        
+        # Return in format frontend expects
         return {
-            "model_name": MODEL_NAME,
-            "version1": model1,
-            "version2": model2,
-            "comparison": {
-                "winner": winner,
-                "metric_used": r2_key,
-                "r2_difference": round(r2_diff, 4) if r2_diff else None
-            }
+            "version_a": model1,  # Changed from version1
+            "version_b": model2,  # Changed from version2
+            "winner": winner,
+            "improvement": {
+                "r2": abs(model1["r2_score"] - model2["r2_score"]) if model1["r2_score"] and model2["r2_score"] else None,
+                "rmse": abs(model1["rmse"] - model2["rmse"]) if model1["rmse"] and model2["rmse"] else None,
+            } if model1["r2_score"] and model2["r2_score"] else None
         }
         
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.get(
     "/train/status/{job_id}",
     tags=["🚀 Training & Jobs"],
