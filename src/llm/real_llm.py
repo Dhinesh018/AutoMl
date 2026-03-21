@@ -25,7 +25,7 @@ def get_llm_decision(dataset_profile: dict, available_models: list) -> dict:
     user_prompt = build_dataset_prompt(dataset_profile, available_models)
     
     try:
-        # Call Groq API
+        # Call Groq API with 15 second timeout
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -33,7 +33,8 @@ def get_llm_decision(dataset_profile: dict, available_models: list) -> dict:
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.3,
-            max_tokens=500
+            max_tokens=500,
+            timeout=15  # ← ADD THIS LINE - 15 second timeout
         )
         
         response_text = completion.choices[0].message.content
@@ -62,6 +63,8 @@ def get_llm_decision(dataset_profile: dict, available_models: list) -> dict:
             if model["name"] in selected_model_names
         ]
         
+        print(f"✅ LLM selected {len(selected_configs)} models: {[m['name'] for m in selected_configs]}")
+        
         return {
             "selected_models": selected_configs,
             "reasoning": llm_decision.get("reasoning", "No reasoning provided"),
@@ -72,10 +75,12 @@ def get_llm_decision(dataset_profile: dict, available_models: list) -> dict:
     except json.JSONDecodeError as e:
         print(f"⚠️  Failed to parse LLM JSON response: {e}")
         print(f"Raw response: {response_text}")
-        # Fallback to all models
+        # Fallback to top 3 models
+        fallback_models = available_models[:3]  # Take first 3 models
+        print(f"📝 Falling back to {len(fallback_models)} default models")
         return {
-            "selected_models": available_models,
-            "reasoning": "LLM response parsing failed, using all models as fallback",
+            "selected_models": fallback_models,
+            "reasoning": "LLM response parsing failed, using top 3 models as fallback",
             "skipped_models": {},
             "llm_raw_response": response_text,
             "error": str(e)
@@ -83,10 +88,12 @@ def get_llm_decision(dataset_profile: dict, available_models: list) -> dict:
     
     except Exception as e:
         print(f"⚠️  LLM API call failed: {e}")
-        # Fallback to all models
+        # Fallback to top 3 models
+        fallback_models = available_models[:3]  # Take first 3 models
+        print(f"📝 Falling back to {len(fallback_models)} default models")
         return {
-            "selected_models": available_models,
-            "reasoning": f"LLM API failed: {str(e)}, using all models as fallback",
+            "selected_models": fallback_models,
+            "reasoning": f"LLM API failed: {str(e)}, using top 3 models as fallback",
             "skipped_models": {},
             "error": str(e)
         }
