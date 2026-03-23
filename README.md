@@ -324,6 +324,23 @@ uvicorn src.api.main:app --reload
 ```
 
 ---
+## 📸 Screenshots
+
+### Upload Page
+![Upload](screenshots/upload.png)
+*Drag-and-drop dataset upload with instant validation*
+
+### Training Dashboard
+![Training](screenshots/training.png)
+*Real-time training progress with live metrics*
+
+### Model Registry
+![Models](screenshots/models.png)
+*Complete MLOps lifecycle - promote, rollback, compare*
+
+### Model Comparison
+![Comparison](screenshots/comparison.png)
+*Side-by-side model performance analysis*
 
 ## 🚧 Roadmap
 
