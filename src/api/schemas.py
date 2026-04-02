@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, validator
-from typing import Dict, Optional
+from typing import Dict, Optional ,Any
 
 
 class DatasetUploadResponse(BaseModel):
@@ -31,7 +31,7 @@ class TrainResponse(BaseModel):
 
 class PredictRequest(BaseModel):
     """Request for prediction"""
-    features: Dict[str, float]
+    features: Dict[str, Any]
     
     @validator('features')
     def validate_features(cls, v):

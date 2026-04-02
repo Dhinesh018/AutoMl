@@ -1,7 +1,8 @@
 from fastapi import BackgroundTasks
 from src.jobs.training_jobs import run_training_job
 from src.jobs.job_store import job_store
-import uuid
+import json
+from typing import Dict , Any
 import psutil
 import platform
 from fastapi import FastAPI, HTTPException
@@ -77,7 +78,7 @@ Upload Dataset → LLM Analyzes & Selects Models → Train Subset
     version="1.0.0",
     contact={
         "name": "AutoML Assistant Project",
-        "url": "https://github.com/yourusername/automl-assistant",
+        "url": "https://github.com/Dhinesh018/automl-assistant",
     },
     license_info={
         "name": "MIT License",
@@ -213,7 +214,7 @@ class TrainResponse(BaseModel):
 
 
 class PredictRequest(BaseModel):
-    features: dict
+    features: Dict[str, float]
 
 
 class PredictResponse(BaseModel):
@@ -713,89 +714,129 @@ async def upload_dataset_endpoint(
     """
     return await upload_dataset(file, target_column)
 
+from pydantic import BaseModel
+from typing import Dict, Any
+
+class DynamicPredictionRequest(BaseModel):
+    features: Dict[str, Any]  # Dynamic - accepts any features
+
 @app.post(
     "/predict",
     tags=["🎯 Predictions"],
-    summary="Get prediction from Production model",
-    response_description="Prediction generated successfully",
+    summary="Make a prediction (dynamic features)",
 )
-def predict(req: PredictRequest):
+async def predict(request: DynamicPredictionRequest):
     """
-    Run inference using the currently active **Production** model.
-    
-    Pass your feature values as a JSON object. The system automatically applies 
-    the same preprocessing used during training.
-    
-    **Example request:**
-```json
-    {
-      "features": {
-        "LotArea": 11950,
-        "OverallQual": 7,
-        "YearBuilt": 2003,
-        "GrLivArea": 1710,
-        "FullBath": 2,
-        "GarageCars": 2
-      }
-    }
-```
-    
-    **Example response:**
-```json
-    {
-      "prediction": 215000.0,
-      "model_name": "llm_automl_tabular_model",
-      "model_version": 5,
-      "model_stage": "Production"
-    }
-```
-    
-    ⚠️ **Note:** If you get a 503 error, train a model first and restart the API.
+    Make a prediction using Production model.
+    Dynamically validates features based on trained model.
     """
-    # ... your existing implementation ...
-    # Check if model exists
-    if model is None:
-        raise NoProductionModelError()
-    
     try:
-        incoming_features = req.features
-
-        # Check missing fields
-        missing = set(EXPECTED_FEATURES) - set(incoming_features.keys())
-        if missing:
+        # 1. Load Production model
+        client = MlflowClient()
+        prod_versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+        
+        if not prod_versions:
+            raise HTTPException(
+                status_code=404,
+                detail="No Production model found. Train a model first."
+            )
+        
+        prod_version = prod_versions[0]
+        run_id = prod_version.run_id
+        
+        # 2. Load feature metadata from MLflow artifact
+        import tempfile
+        try:
+            local_dir = tempfile.mkdtemp()
+            local_path = client.download_artifacts(
+                run_id, 
+                "feature_metadata.json", 
+                dst_path=local_dir
+            )
+            
+            with open(local_path, 'r') as f:
+                feature_metadata = json.load(f)
+            
+            expected_features = set(feature_metadata['features'])
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load feature metadata: {str(e)}"
+            )
+        
+        # 3. Validate incoming features
+        incoming_features = set(request.features.keys())
+        
+        missing_features = expected_features - incoming_features
+        extra_features = incoming_features - expected_features
+        
+        if missing_features:
             raise HTTPException(
                 status_code=400,
-                detail=f"Missing features: {missing}"
+                detail={
+                    "error": "Missing required features",
+                    "missing": list(missing_features),
+                    "expected": list(expected_features)
+                }
             )
-
-        # Check unexpected fields
-        extra = set(incoming_features.keys()) - set(EXPECTED_FEATURES)
-        if extra:
+        
+        if extra_features:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unexpected features: {extra}"
+                detail={
+                    "error": "Unexpected features provided",
+                    "unexpected": list(extra_features),
+                    "expected": list(expected_features)
+                }
             )
-
-        df = pd.DataFrame([incoming_features])
-        prediction = model.predict(df)[0]
-
-        # Log before returning
-        with mlflow.start_run(run_name="prediction_log"):
-            mlflow.log_params(incoming_features)
-            mlflow.log_metric("prediction", float(prediction))
-
-        # Return prediction with version
+        
+        # 4. Load model
+        model_uri = f"models:/{MODEL_NAME}/Production"
+        model = mlflow.pyfunc.load_model(model_uri)
+        
+        # 5. Create DataFrame with correct feature order
+        import pandas as pd
+        
+        # Ensure features are in the same order as training
+        ordered_features = {
+            feat: request.features[feat] 
+            for feat in feature_metadata['features']
+        }
+        
+        feature_df = pd.DataFrame([ordered_features]).astype(float)
+        
+        # 6. Make prediction
+        prediction = model.predict(feature_df)[0]
+        
+        # 7. Get model info
+        try:
+            run = client.get_run(run_id)
+            algorithm = run.data.params.get('best_model', 'Unknown')
+            r2_score = run.data.metrics.get('best_r2', None)
+        except:
+            algorithm = 'Unknown'
+            r2_score = None
+        
         return {
             "prediction": float(prediction),
             "model_name": MODEL_NAME,
-            "model_stage": MODEL_STAGE,
-            "model_version": model_version
+            "model_version": int(prod_version.version),
+            "model_algorithm": algorithm,
+            "model_r2_score": r2_score,
+            "model_stage": "Production",
+            "target": feature_metadata.get('target'),
+            "features_used": list(ordered_features.keys()),
+            "num_features": len(ordered_features)
         }
-
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Prediction failed: {str(e)}"
+        )
 @app.get(
     "/health",
     tags=["💚 System Health"],
@@ -881,3 +922,164 @@ async def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+@app.get(
+    "/models/production/features",
+    tags=["🎯 Predictions"],
+    summary="Get features for Production model",
+)
+async def get_production_features():
+    """
+    Get features required by Production model.
+    """
+    try:
+        client = MlflowClient()
+        
+        # Get Production model
+        prod_versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+        
+        if not prod_versions:
+            raise HTTPException(
+                status_code=404, 
+                detail="No Production model found. Train a model first."
+            )
+        
+        prod_version = prod_versions[0]
+        run_id = prod_version.run_id
+        
+        # Try to download feature metadata
+        import tempfile
+        import os
+        
+        try:
+            local_dir = tempfile.mkdtemp()
+            artifact_path = os.path.join(local_dir, "feature_metadata.json")
+            
+            # Download artifact
+            client.download_artifacts(
+                run_id, 
+                "feature_metadata.json", 
+                dst_path=local_dir
+            )
+            
+            # Read file
+            with open(artifact_path, 'r') as f:
+                feature_metadata = json.load(f)
+            
+            # Add model info
+            feature_metadata["model_version"] = int(prod_version.version)
+            feature_metadata["model_stage"] = "Production"
+            
+            return feature_metadata
+            
+        except Exception as e:
+            print(f"⚠️ Failed to load feature_metadata.json: {e}")
+            
+            # Fallback: try dataset profile
+            try:
+                local_dir = tempfile.mkdtemp()
+                artifact_path = os.path.join(local_dir, "dataset_profile.json")
+                
+                client.download_artifacts(
+                    run_id,
+                    "dataset_profile.json",
+                    dst_path=local_dir
+                )
+                
+                with open(artifact_path, 'r') as f:
+                    profile = json.load(f)
+                
+                # Extract features from profile
+                all_columns = profile.get('columns', [])
+                target = profile.get('target_column', '')
+                features = [col for col in all_columns if col != target]
+                
+                return {
+                    "features": features,
+                    "target": target,
+                    "num_features": len(features),
+                    "numeric_features": profile.get('numeric_columns', []),
+                    "categorical_features": profile.get('categorical_columns', []),
+                    "model_version": int(prod_version.version),
+                    "model_stage": "Production"
+                }
+                
+            except Exception as e2:
+                print(f"⚠️ Failed to load dataset_profile.json: {e2}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not load feature metadata. Train a new model with updated code. Error: {str(e2)}"
+                )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get production features: {str(e)}"
+        )
+
+
+@app.get(
+    "/models/{version}/features",
+    tags=["📦 Model Management"],
+    summary="Get feature names for a model version",
+)
+async def get_model_features(version: int):
+    """
+    Get the list of features required by a specific model version.
+    """
+    try:
+        client = MlflowClient()
+        
+        # Get model version
+        all_versions = client.search_model_versions(f'name="{MODEL_NAME}"')
+        model_versions = [v for v in all_versions if int(v.version) == version]
+        
+        if not model_versions:
+            raise HTTPException(status_code=404, detail=f"Model version {version} not found")
+        
+        model_version = model_versions[0]
+        run_id = model_version.run_id
+        
+        # Download feature metadata artifact
+        try:
+            import tempfile
+            
+            local_dir = tempfile.mkdtemp()
+            local_path = client.download_artifacts(run_id, "feature_metadata.json", dst_path=local_dir)
+            
+            with open(local_path, 'r') as f:
+                feature_metadata = json.load(f)
+            
+            feature_metadata["model_version"] = version
+            
+            return feature_metadata
+            
+        except Exception as e:
+            # Fallback - get from dataset profile
+            try:
+                local_dir = tempfile.mkdtemp()
+                local_path = client.download_artifacts(run_id, "dataset_profile.json", dst_path=local_dir)
+                
+                with open(local_path, 'r') as f:
+                    profile = json.load(f)
+                
+                features = [col for col in profile.get('columns', []) if col != profile.get('target_column')]
+                
+                return {
+                    "features": features,
+                    "target": profile.get('target_column'),
+                    "num_features": len(features),
+                    "model_version": version
+                }
+            except:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Feature metadata not found for this model"
+                )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

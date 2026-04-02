@@ -2,6 +2,7 @@ import { useState } from 'react'
 import UploadPage from './pages/UploadPage'
 import TrainingPage from './pages/TrainingPage'
 import ModelsPage from './pages/ModelsPage'
+import PredictionPage from './pages/PredictionPage'
 
 function App() {
   const [currentPage, setCurrentPage] = useState('upload')
@@ -88,6 +89,23 @@ function App() {
           >
             📦 Models
           </button>
+
+          <button
+            onClick={() => setCurrentPage('prediction')}
+            style={{
+              padding: '8px 16px',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: currentPage === 'prediction' ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+              background: currentPage === 'prediction' ? 'var(--color-primary-light)' : 'transparent',
+              border: 'none',
+              borderRadius: 'var(--radius-md)',
+              cursor: 'pointer',
+              transition: 'all var(--transition-fast)'
+            }}
+          >
+            ✨ Predict
+          </button>
         </div>
       </nav>
 
@@ -105,6 +123,10 @@ function App() {
 
       {currentPage === 'models' && (
         <ModelsPage />
+      )}
+
+      {currentPage === 'prediction' && (
+        <PredictionPage />
       )}
       
     </div>

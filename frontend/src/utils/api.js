@@ -41,6 +41,11 @@ export const listTrainingJobs = async () => {
 }
 
 // Prediction API
+export const getProductionFeatures = async () => {
+  const response = await api.get('/models/production/features')
+  return response.data
+}
+
 export const makePrediction = async (features) => {
   const response = await api.post('/predict', { features })
   return response.data
