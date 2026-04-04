@@ -3,9 +3,10 @@ import mlflow.sklearn
 from lightgbm import LGBMRegressor
 from xgboost import XGBRegressor
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression , ElasticNet
-
-from src.automl.evaluate import evaluate
+from sklearn.linear_model import LinearRegression, ElasticNet
+from sklearn.metrics import r2_score, mean_squared_error
+import numpy as np
+from .pipeline import ProductionPipeline
 
 
 MODEL_REGISTRY = {
@@ -16,37 +17,53 @@ MODEL_REGISTRY = {
     "LightGBM": LGBMRegressor
 }
 
-
 MODEL_NAME = "llm_automl_tabular_model"
 
-def run_automl(models, X_train, X_test, y_train, y_test):
 
-    best_model = None
-    best_score = float("-inf")
-    best_name = None
+def run_automl(models_to_run, X_train, X_test, y_train, y_test):
+    """
+    Train multiple models with production pipeline
+    Returns best model pipeline
+    """
+    results = {}
 
-    for model_cfg in models:
-        model_name = model_cfg["name"]
-        params = model_cfg.get("params", {})
+    for model_config in models_to_run:
+        model_name = model_config['name']
 
-        model_cls = MODEL_REGISTRY[model_name]
-        model = model_cls(**params)
+        # Get model class
+        model_class = model_config.get('class') or MODEL_REGISTRY.get(model_name)
 
-    with mlflow.start_run(run_name=model_name, nested=True):
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
+        if model_class is None:
+            raise ValueError(f"Model class missing for {model_name}")
 
-        metrics = evaluate(y_test, preds)
+        print(f"🔹 Training {model_name}...")
 
-        for k, v in metrics.items():
-            mlflow.log_metric(k, v)
+        # Create model instance
+        model = model_class(**model_config.get('params', {}))
 
-        mlflow.log_params(params)
-        # ✅ NO mlflow.sklearn.log_model HERE!
+        # Build FULL PIPELINE (preprocessing + model)
+        pipeline = ProductionPipeline.build(X_train, model)
 
-        if metrics["r2"] > best_score:
-            best_score = metrics["r2"]
-            best_model = model
-            best_name = model_name
+        # Train
+        pipeline.fit(X_train, y_train)
 
-    return best_name, best_score, best_model
+        # Evaluate
+        y_pred = pipeline.predict(X_test)
+        r2 = r2_score(y_test, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+
+        results[model_name] = {
+            'pipeline': pipeline,
+            'r2': r2,
+            'rmse': rmse
+        }
+
+        print(f"   R²: {r2:.4f}, RMSE: {rmse:.4f}")
+
+    # Select best
+    best_name = max(results, key=lambda x: results[x]['r2'])
+    best_result = results[best_name]
+
+    print(f"✅ Best: {best_name}")
+
+    return best_name, best_result['r2'], best_result['pipeline']

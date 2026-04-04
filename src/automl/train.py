@@ -112,11 +112,15 @@ def train_from_config(config_path: str) -> dict:
         mlflow.log_metric("best_mae", best_mae)
         mlflow.log_param("best_model", best_name)
 
+        from mlflow.models.signature import infer_signature
+
+        
         # 6. Log model artifact
         mlflow.sklearn.log_model(
             sk_model=best_model,
             artifact_path="model",
-            input_example=X_train.iloc[:1]
+            
+            input_example=X_train.iloc[:5]
         )
 
         run_id = run.info.run_id

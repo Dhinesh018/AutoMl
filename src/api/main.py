@@ -793,7 +793,7 @@ async def predict(request: DynamicPredictionRequest):
         
         # 4. Load model
         model_uri = f"models:/{MODEL_NAME}/Production"
-        model = mlflow.pyfunc.load_model(model_uri)
+        model = mlflow.sklearn.load_model(model_uri)
         
         # 5. Create DataFrame with correct feature order
         import pandas as pd
@@ -804,7 +804,7 @@ async def predict(request: DynamicPredictionRequest):
             for feat in feature_metadata['features']
         }
         
-        feature_df = pd.DataFrame([ordered_features]).astype(float)
+        feature_df = pd.DataFrame([ordered_features])
         
         # 6. Make prediction
         prediction = model.predict(feature_df)[0]

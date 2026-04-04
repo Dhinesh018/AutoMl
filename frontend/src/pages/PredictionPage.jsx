@@ -83,13 +83,13 @@ const PredictionPage = () => {
     setFeatures({ ...features, [name]: value })
   }
 
-  const handlePredict = async () => {
+const handlePredict = async () => {
   setLoading(true)
   setError(null)
   setPrediction(null)
 
   try {
-    // Prepare features: convert only numeric ones to numbers
+    // Prepare features with smart type handling
     const processedFeatures = {}
     const emptyFields = []
     
@@ -100,16 +100,16 @@ const PredictionPage = () => {
         continue
       }
       
-      // Check if this feature is numeric
+      // 🔥 CRITICAL: Check if feature is numeric or categorical
       if (featureMetadata.numeric_features?.includes(key)) {
-        // Convert to number for numeric features
+        // NUMERIC: Convert to number
         const num = parseFloat(value)
         if (isNaN(num)) {
           throw new Error(`Invalid number for ${key}: ${value}`)
         }
         processedFeatures[key] = num
       } else {
-        // Keep as string for categorical features
+        // CATEGORICAL: Keep as string
         processedFeatures[key] = value
       }
     }
@@ -118,6 +118,8 @@ const PredictionPage = () => {
     if (emptyFields.length > 0) {
       throw new Error(`Please fill in all fields. Missing: ${emptyFields.slice(0, 5).join(', ')}${emptyFields.length > 5 ? '...' : ''}`)
     }
+
+    console.log('🔹 Sending to backend:', processedFeatures)
 
     // Make prediction
     const result = await makePrediction(processedFeatures)
@@ -137,22 +139,17 @@ const PredictionPage = () => {
     const backendError = err.response?.data?.detail
     
     if (Array.isArray(backendError)) {
-      // FastAPI validation error array
       setError(backendError.map(e => `${e.loc?.join('.')}: ${e.msg}`).join('; '))
     } else if (typeof backendError === 'object' && backendError !== null) {
-      // Error object with error/missing/unexpected fields
       if (backendError.error) {
         const details = backendError.missing || backendError.unexpected || []
         setError(`${backendError.error}${details.length > 0 ? ': ' + details.join(', ') : ''}`)
       } else {
-        // Generic object - stringify it
         setError(JSON.stringify(backendError))
       }
     } else if (typeof backendError === 'string') {
-      // Simple string error
       setError(backendError)
     } else {
-      // Fallback to error message
       setError(err.message || 'Prediction failed')
     }
   } finally {
