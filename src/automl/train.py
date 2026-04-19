@@ -8,12 +8,12 @@ from src.automl.data_loader import load_dataset
 from src.automl.preprocessor import preprocess
 from src.automl.automl_engine import run_automl
 from src.llm.real_llm import get_llm_decision
-from src.config import MLFLOW_TRACKING_URI, MODEL_NAME
-
+from src.config import MLFLOW_TRACKING_URI, get_model_name  
+from src.db.database import SessionLocal
+from src.db import models as db_models
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-
-def train_from_config(config_path: str) -> dict:
+def train_from_config(config_path: str, user_id: int) -> dict:
     # Load config
     with open(config_path) as f:
         config = json.load(f)
@@ -23,11 +23,13 @@ def train_from_config(config_path: str) -> dict:
         config["dataset_path"],
         config["target_column"]
     )
-
+    
+    MODEL_NAME = get_model_name(user_id)
+    
     # Profile dataset
     dataset_profile = profile_dataset(df, config["target_column"])
 
-    # 🔥 EXTRACT FEATURE NAMES (NEW!)
+    # 🔥 EXTRACT FEATURE NAMES
     target_column = config["target_column"]
     feature_columns = [col for col in df.columns if col != target_column]
     
@@ -52,14 +54,13 @@ def train_from_config(config_path: str) -> dict:
     automl_cfg = config["automl"]
 
     with mlflow.start_run(run_name="AutoML_Run") as run:
-
         # 1. Log dataset profile
         mlflow.log_text(
             json.dumps(dataset_profile, indent=2),
             artifact_file="dataset_profile.json"
         )
 
-        # 🔥 2. LOG FEATURE METADATA (NEW!)
+        # 🔥 2. LOG FEATURE METADATA
         feature_metadata = {
             "features": feature_columns,
             "target": target_column,
@@ -111,15 +112,11 @@ def train_from_config(config_path: str) -> dict:
         mlflow.log_metric("best_rmse", best_rmse)
         mlflow.log_metric("best_mae", best_mae)
         mlflow.log_param("best_model", best_name)
-
-        from mlflow.models.signature import infer_signature
-
         
         # 6. Log model artifact
         mlflow.sklearn.log_model(
             sk_model=best_model,
             artifact_path="model",
-            
             input_example=X_train.iloc[:5]
         )
 
@@ -138,7 +135,6 @@ def train_from_config(config_path: str) -> dict:
     # 8. ✅ AUTO-PROMOTE TO PRODUCTION
     print(f"🚀 Auto-promoting model version {model_version} to Production...")
     
-    # Archive old Production model (if exists)
     try:
         current_prod = client.get_latest_versions(MODEL_NAME, stages=["Production"])
         if current_prod:
@@ -150,7 +146,7 @@ def train_from_config(config_path: str) -> dict:
             )
             print(f"📦 Archived old Production model (version {old_version})")
     except Exception as e:
-        print(f"⚠️  No previous Production model to archive")
+        print(f"⚠️ No previous Production model to archive")
 
     # Promote new model to Production
     client.transition_model_version_stage(
@@ -160,6 +156,25 @@ def train_from_config(config_path: str) -> dict:
     )
     print(f"✅ Model version {model_version} promoted to Production!")
 
+    # 9. 🔥 SAVE TO DATABASE
+    # Using your specific logic to persist the MLflow record to SQL
+    db = SessionLocal()
+    try:
+        db_model = db_models.Model(
+            user_id=user_id,
+            model_name=MODEL_NAME,
+            version=int(model_version),
+            run_id=run_id
+        )
+        db.add(db_model)
+        db.commit()
+        print(f"💾 Saved model to database: user_id={user_id}, version={model_version}")
+    except Exception as e:
+        print(f"⚠️ Failed to save to DB: {e}")
+    finally:
+        db.close()
+
+    # 10. Return results
     return {
         "best_model": best_name,
         "best_score": best_score,
@@ -169,5 +184,5 @@ def train_from_config(config_path: str) -> dict:
         "model_version": model_version,
         "run_id": run_id,
         "stage": "Production",
-        "num_features": len(feature_columns)  # 🔥 NEW!
+        "num_features": len(feature_columns)
     }

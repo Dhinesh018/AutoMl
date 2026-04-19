@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { Upload, FileText, AlertCircle, CheckCircle } from 'lucide-react'
 import { uploadDataset } from '../utils/api'
 
@@ -9,6 +9,9 @@ const UploadPage = ({ onUploadSuccess }) => {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [uploadResult, setUploadResult] = useState(null)
+  
+  // 1. Added useRef for the file input
+  const fileInputRef = useRef(null)
 
   const handleDrag = (e) => {
     e.preventDefault()
@@ -77,9 +80,34 @@ const UploadPage = ({ onUploadSuccess }) => {
         onUploadSuccess(result)
       }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Upload failed. Please try again.')
+      // 2. Safely parse the backend error object into a string
+      const data = err.response?.data;
+      let errorMessage = 'Upload failed. Please try again.';
+
+      if (data && typeof data === 'object') {
+        if (data.message) {
+          errorMessage = data.message;
+          // Append the helpful suggestion from your backend if it exists
+          if (data.suggestion) {
+            errorMessage += ` Suggestion: ${data.suggestion}`;
+          }
+        } else if (data.error) {
+          errorMessage = typeof data.error === 'string' ? data.error : 'An error occurred';
+        } else if (data.detail) {
+          errorMessage = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+        }
+      }
+      
+      setError(errorMessage);
     } finally {
       setUploading(false)
+    }
+  }
+
+  // 3. Trigger the click using the React Ref safely
+  const handleAreaClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
     }
   }
 
@@ -129,10 +157,10 @@ const UploadPage = ({ onUploadSuccess }) => {
             transform: 'scale(1.02)'
           })
         }}
-        onClick={() => document.getElementById('file-input').click()}
+        onClick={handleAreaClick}
       >
         <input
-          id="file-input"
+          ref={fileInputRef}
           type="file"
           accept=".csv,.xlsx,.xls"
           onChange={handleFileInput}
@@ -250,7 +278,7 @@ const UploadPage = ({ onUploadSuccess }) => {
           animation: 'slideUp 0.3s ease'
         }}>
           <AlertCircle size={20} style={{ color: 'var(--color-danger)', flexShrink: 0 }} />
-          <p style={{ fontSize: '14px', color: 'var(--color-danger)' }}>{error}</p>
+          <p style={{ fontSize: '14px', color: 'var(--color-danger)', margin: 0 }}>{error}</p>
         </div>
       )}
 
@@ -274,7 +302,8 @@ const UploadPage = ({ onUploadSuccess }) => {
             <p style={{
               fontSize: '16px',
               fontWeight: '500',
-              color: 'var(--color-success)'
+              color: 'var(--color-success)',
+              margin: 0
             }}>
               Dataset uploaded successfully!
             </p>
@@ -287,9 +316,9 @@ const UploadPage = ({ onUploadSuccess }) => {
             fontSize: '14px',
             color: 'var(--color-text-secondary)'
           }}>
-            <p><strong>Dataset ID:</strong> {uploadResult.dataset_id}</p>
-            <p><strong>Rows:</strong> {uploadResult.num_rows}</p>
-            <p><strong>Columns:</strong> {uploadResult.num_columns}</p>
+            <p style={{ margin: '0 0 8px 0' }}><strong>Dataset ID:</strong> {uploadResult.dataset_id}</p>
+            <p style={{ margin: '0 0 8px 0' }}><strong>Rows:</strong> {uploadResult.num_rows}</p>
+            <p style={{ margin: 0 }}><strong>Columns:</strong> {uploadResult.num_columns}</p>
           </div>
         </div>
       )}

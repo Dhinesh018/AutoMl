@@ -9,7 +9,8 @@ from src.utils.logger import logger
 async def run_training_job(
     job_id: str,
     dataset_id: str,
-    target_column: str
+    target_column: str,
+    user_id: int
 ):
     """
     Execute training in background
@@ -78,7 +79,7 @@ async def run_training_job(
         logger.info(f"[{job_id}] Starting AutoML training...")
         
         # Run training
-        result = train_from_config(config_path)
+        result = train_from_config(config_path ,user_id)
         
         logger.info(f"[{job_id}] Training completed - Best model: {result['best_model']}, R²: {result['best_score']:.4f}")
         
@@ -108,6 +109,7 @@ async def run_training_job(
         )
         
         logger.info(f"[{job_id}] ✅ Job completed successfully!")
+        
         
     except Exception as e:
         logger.error(f"[{job_id}] ❌ Training failed: {str(e)}", exc_info=True)

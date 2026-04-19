@@ -33,3 +33,6 @@ Thumbs.db
 
 # MLflow
 mlflow_data/
+
+#video files
+*.mp4

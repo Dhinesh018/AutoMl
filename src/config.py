@@ -17,7 +17,9 @@ MLFLOW_TRACKING_URI = os.getenv(
 MLFLOW_ARTIFACT_ROOT = str(PROJECT_ROOT / "mlflow_artifacts")
 
 # Model configuration
-MODEL_NAME = "llm_automl_tabular_model"
+def get_model_name(user_id: int) -> str:
+    """Each user gets their own MLflow model"""
+    return f"user_{user_id}_automl_model"
 MODEL_STAGE = "Production"
 
 # Groq API

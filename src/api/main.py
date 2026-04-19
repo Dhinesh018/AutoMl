@@ -1,12 +1,22 @@
-from fastapi import BackgroundTasks
+from src.db.database import init_db
+from src.api.routers import auth
+from src.db.database import get_db
+from sqlalchemy.orm import Session
+from src.auth.jwt import get_current_user_id
+from fastapi import BackgroundTasks , Depends
 from src.jobs.training_jobs import run_training_job
 from src.jobs.job_store import job_store
 import json
+import tempfile
+from src.db import models
+from src.config import MLFLOW_TRACKING_URI, get_model_name
+from mlflow.tracking import MlflowClient
 from typing import Dict , Any
 import psutil
 import platform
 from fastapi import FastAPI, HTTPException
 from fastapi import Request
+import pathlib
 from src.utils.logger import logger
 import uuid
 import time
@@ -27,11 +37,13 @@ from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.automl.train import train_from_config
-from src.config import MLFLOW_TRACKING_URI, MODEL_NAME, MODEL_STAGE
+from src.config import MLFLOW_TRACKING_URI, MODEL_STAGE, get_model_name
 from fastapi import UploadFile, Form
 from src.api.upload import upload_dataset
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, Form, Query
 from typing import Optional
+from src.auth.api_key import verify_api_key
+from src.db.models import APIUsage
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
@@ -88,11 +100,19 @@ Upload Dataset → LLM Analyzes & Selects Models → Train Subset
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["http://localhost:5173"],  # Frontend URL
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+# Initialize database
+@app.on_event("startup")
+def startup():
+    init_db()
+    print("✅ Database initialized")
+
+# Include auth router
+app.include_router(auth.router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -181,26 +201,9 @@ EXPECTED_FEATURES = [
 # ---------------- LOAD MODEL ON STARTUP ----------------
 def load_model():
     """Load model from Production stage. Returns None if not found."""
-    try:
-        model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
-        loaded_model = mlflow.pyfunc.load_model(model_uri)
-        
-        from mlflow.tracking import MlflowClient
-        client = MlflowClient()
-        model_versions = client.get_latest_versions(MODEL_NAME, stages=[MODEL_STAGE])
-        version = int(model_versions[0].version) if model_versions else 0
-        
-        return loaded_model, version
-    except MlflowException:
-        # Don't crash - return None instead
-        return None, None
+    return None, None
 
-try:
-    model, model_version = load_model()
-    print(f"✅ Loaded model version {model_version} from Production")
-except Exception as e:
-    print(f"⚠️  No Production model found: {e}")
-    model, model_version = None, None
+model, model_version = None, None
 
 # ---------------- SCHEMAS ----------------
 class TrainRequest(BaseModel):
@@ -230,7 +233,6 @@ async def root():
     """Redirect to API docs"""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/docs")
-
 @app.post(
     "/train",
     tags=["🚀 Training & Jobs"],
@@ -241,48 +243,74 @@ async def root():
 async def trigger_training(
     dataset_id: str = Query(..., description="Dataset ID from /datasets/upload", example="dataset_20260314_123456_abc123"),
     target_column: str = Query(..., description="Target column to predict", example="SalePrice"),
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
     background_tasks: BackgroundTasks = None
 ):
+    
     """
+
     Trigger an AutoML training run for an uploaded dataset.
+
     
+
     **What happens:**
+
     1. LLM analyzes the dataset profile
+
     2. LLM selects 1-3 most promising models
+
     3. Selected models are trained and evaluated
+
     4. Best model is registered in MLflow
+
     5. Winner is **auto-promoted to Production**
+
     
+
     Training runs in the **background**. This endpoint returns immediately with a `job_id`.
+
     
+
     **Poll** `GET /train/status/{job_id}` to track progress.
+
     
+
     **Typical training time:** 30 seconds - 5 minutes
+
     """
-    """
-    Trigger training job with uploaded dataset
-    """
+    
     
     logger.info(f"Training request - dataset_id: {dataset_id}, target: {target_column}")
     
-    # ... existing validation code ...
+    # Validate dataset exists
+    upload_dir = pathlib.Path("/app/data/uploads")
+    dataset_files = list(upload_dir.glob(f"{dataset_id}.*"))
     
-    # Create job
+    if not dataset_files:
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+    
+    # 1. Create unique job identifier
+    import uuid
     job_id = f"job_{uuid.uuid4().hex[:12]}"
+    
+    # 2. Create job in store
     job = job_store.create_job(job_id, dataset_id, target_column)
     
     logger.info(f"Created training job: {job_id}")
     
-    # Start background task
+    # 3. Start background task
     background_tasks.add_task(
         run_training_job,
         job_id,
         dataset_id,
-        target_column
+        target_column,
+        user_id  # 🔥 PASS user_id
     )
     
     logger.info(f"Started background training job: {job_id}")
     
+    # 4. Return immediate response
     return {
         "job_id": job_id,
         "status": "pending",
@@ -290,18 +318,17 @@ async def trigger_training(
         "dataset_id": dataset_id,
         "target_column": target_column
     }
-
-# Initialize MLflow client
 mlflow_client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
-
-
 @app.get(
     "/models/versions",
     tags=["📦 Model Management"],
     summary="List all registered model versions",
-    response_description="List of all model versions with metrics",
-)
-async def list_model_versions():
+    response_description="List of all model versions with metrics")
+
+async def list_model_versions(
+    user_id: int = Depends(get_current_user_id), 
+    db: Session = Depends(get_db)
+):
     """
     List every model version in the MLflow registry.
     
@@ -313,14 +340,34 @@ async def list_model_versions():
     
     Use this before promoting or rolling back models.
     """
+    
+    # 1. 🔥 Get models from DB for this user
+    user_models = db.query(models.Model).filter(
+        models.Model.user_id == user_id
+    ).all()
+    MODEL_NAME = get_model_name(user_id)
+    # Convert versions to integers for comparison, filtering out placeholders like "v1-pending"
+    user_versions = []
+    for m in user_models:
+        try:
+            version_val = int(m.version)
+            if version_val != 0:  # 🔥 Add this: Skip the '0' placeholder
+                user_versions.append(version_val)
+        except (ValueError, TypeError):
+            continue
+    
     try:
-        versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
+        # 2. Fetch all versions from MLflow
+        all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
         
-        if not versions:
+        # 3. 🔥 Filter to only include versions that exist in the user's DB records
+        filtered_versions = [v for v in all_versions if int(v.version) in user_versions]
+        
+        if not filtered_versions:
             return {
                 "model_name": MODEL_NAME,
                 "total_versions": 0,
-                "models": [],  # Changed from 'versions' to 'models'
+                "models": [], 
                 "production_version": None,
                 "message": "No models registered yet. Train a model first."
             }
@@ -328,17 +375,17 @@ async def list_model_versions():
         version_list = []
         production_version = None
         
-        for v in sorted(versions, key=lambda x: int(x.version), reverse=True):
+        # Sort the filtered list
+        for v in sorted(filtered_versions, key=lambda x: int(x.version), reverse=True):
             # Get the run to fetch metrics
             try:
                 run = mlflow_client.get_run(v.run_id)
                 metrics = run.data.metrics
                 params = run.data.params
                 
-                # Try different metric names
                 # Try different metric names, default to None if not found
                 r2_score = metrics.get('best_r2', metrics.get('r2', metrics.get('r2_score', None)))
-                rmse = metrics.get('best_rmse', metrics.get('rmse', None))  # Will be None - that's OK
+                rmse = metrics.get('best_rmse', metrics.get('rmse', None))
                 mae = metrics.get('best_mae', metrics.get('mae', None))
 
                 # Algorithm from parameters
@@ -371,13 +418,12 @@ async def list_model_versions():
         return {
             "model_name": MODEL_NAME,
             "total_versions": len(version_list),
-            "models": version_list,  # Changed from 'versions' to 'models'
+            "models": version_list, 
             "production_version": production_version
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.post(
     "/models/promote/{version}",
     tags=["📦 Model Management"],
@@ -386,6 +432,7 @@ async def list_model_versions():
 )
 async def promote_model(
     version: int,
+    user_id: int = Depends(get_current_user_id),
     stage: str = Query("Production", description="Target stage: Production, Staging, or Archived")
 ):
     """
@@ -403,6 +450,7 @@ async def promote_model(
     
     ⚠️ **Remember to restart the API** after promoting to Production!
     """
+    MODEL_NAME = get_model_name(user_id)
     valid_stages = ["Production", "Staging", "Archived"]
     
     if stage not in valid_stages:
@@ -463,7 +511,7 @@ async def promote_model(
     summary="Rollback to previous Production model",
     response_description="Rollback completed successfully",
 )
-async def rollback_model():
+async def rollback_model(user_id: int = Depends(get_current_user_id)):
     """
     Instantly roll back to the **most recent Archived** model.
     
@@ -478,6 +526,7 @@ async def rollback_model():
     ⚠️ **Restart the API** after rollback to load the restored model.
     """
     # ... your existing implementation ...
+    MODEL_NAME = get_model_name(user_id)
     try:
         # Get all versions
         all_versions = mlflow_client.search_model_versions(f'name="{MODEL_NAME}"')
@@ -542,7 +591,8 @@ async def rollback_model():
 )
 async def compare_models(
     version1: int = Query(..., description="First model version", example=5),
-    version2: int = Query(..., description="Second model version", example=4)
+    version2: int = Query(..., description="Second model version", example=4),
+    user_id: int = Depends(get_current_user_id)
 ):
     """
     Compare two model versions by their training metrics.
@@ -555,6 +605,7 @@ async def compare_models(
     Use this before promoting a new model to confirm it actually improves 
     on the current Production model.
     """
+    MODEL_NAME = get_model_name(user_id)
     try:
         def get_model_details(version: int):
             # Get model version info
@@ -697,7 +748,8 @@ async def list_training_jobs():
 )
 async def upload_dataset_endpoint(
     file: UploadFile,
-    target_column: str = Form(..., description="Name of the column to predict (e.g., 'SalePrice', 'Price', 'Churn')")
+    target_column: str = Form(..., description="Name of the column to predict (e.g., 'SalePrice', 'Price', 'Churn')"),
+    user_id: int = Depends(get_current_user_id)
 ):
     """
     Upload a CSV or Excel file to use for AutoML training.
@@ -716,7 +768,6 @@ async def upload_dataset_endpoint(
 
 from pydantic import BaseModel
 from typing import Dict, Any
-
 class DynamicPredictionRequest(BaseModel):
     features: Dict[str, Any]  # Dynamic - accepts any features
 
@@ -725,14 +776,22 @@ class DynamicPredictionRequest(BaseModel):
     tags=["🎯 Predictions"],
     summary="Make a prediction (dynamic features)",
 )
-async def predict(request: DynamicPredictionRequest):
+async def predict(
+    request: DynamicPredictionRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db) 
+):
     """
     Make a prediction using Production model.
-    Dynamically validates features based on trained model.
+    Includes strict validation for feature types and user isolation.
     """
+
+    # 1. Isolation: Each user has a unique model namespace
+    MODEL_NAME = get_model_name(user_id)
+    
     try:
-        # 1. Load Production model
-        client = MlflowClient()
+        # 2. Load Production model info from MLflow
+        client = mlflow.tracking.MlflowClient()
         prod_versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
         
         if not prod_versions:
@@ -743,9 +802,9 @@ async def predict(request: DynamicPredictionRequest):
         
         prod_version = prod_versions[0]
         run_id = prod_version.run_id
+        version = int(prod_version.version) 
         
-        # 2. Load feature metadata from MLflow artifact
-        import tempfile
+        # 3. Load feature metadata from MLflow artifact
         try:
             local_dir = tempfile.mkdtemp()
             local_path = client.download_artifacts(
@@ -758,6 +817,8 @@ async def predict(request: DynamicPredictionRequest):
                 feature_metadata = json.load(f)
             
             expected_features = set(feature_metadata['features'])
+            numeric_features = feature_metadata.get('numeric_features', [])
+            categorical_features = feature_metadata.get('categorical_features', [])
             
         except Exception as e:
             raise HTTPException(
@@ -765,40 +826,45 @@ async def predict(request: DynamicPredictionRequest):
                 detail=f"Failed to load feature metadata: {str(e)}"
             )
         
-        # 3. Validate incoming features
+        # 4. Validate incoming features (Presence and Names)
         incoming_features = set(request.features.keys())
-        
         missing_features = expected_features - incoming_features
         extra_features = incoming_features - expected_features
         
-        if missing_features:
+        if missing_features or extra_features:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Missing required features",
+                    "error": "Feature mismatch",
                     "missing": list(missing_features),
-                    "expected": list(expected_features)
+                    "unexpected": list(extra_features)
                 }
             )
-        
-        if extra_features:
+
+        # 5. 🔥 NEW: Strict Type Validation
+        # This prevents "3" (int) from being accepted in categorical text fields
+        type_errors = []
+        for feat, value in request.features.items():
+            if feat in numeric_features:
+                if not isinstance(value, (int, float)):
+                    type_errors.append(f"'{feat}' must be a number (got {type(value).__name__})")
+            
+            elif feat in categorical_features:
+                if not isinstance(value, str):
+                    type_errors.append(f"'{feat}' must be a string/text (got {type(value).__name__})")
+
+        if type_errors:
             raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Unexpected features provided",
-                    "unexpected": list(extra_features),
-                    "expected": list(expected_features)
-                }
+                status_code=422,
+                detail={"error": "Type validation failed", "details": type_errors}
             )
-        
-        # 4. Load model
+
+        # 6. Load model
         model_uri = f"models:/{MODEL_NAME}/Production"
         model = mlflow.sklearn.load_model(model_uri)
         
-        # 5. Create DataFrame with correct feature order
-        import pandas as pd
-        
-        # Ensure features are in the same order as training
+        # 7. Create DataFrame with correct feature order
+        # Ensures features are in the same order as they were during training
         ordered_features = {
             feat: request.features[feat] 
             for feat in feature_metadata['features']
@@ -806,10 +872,10 @@ async def predict(request: DynamicPredictionRequest):
         
         feature_df = pd.DataFrame([ordered_features])
         
-        # 6. Make prediction
+        # 8. Make prediction
         prediction = model.predict(feature_df)[0]
         
-        # 7. Get model info
+        # 9. Get model info for response
         try:
             run = client.get_run(run_id)
             algorithm = run.data.params.get('best_model', 'Unknown')
@@ -821,7 +887,7 @@ async def predict(request: DynamicPredictionRequest):
         return {
             "prediction": float(prediction),
             "model_name": MODEL_NAME,
-            "model_version": int(prod_version.version),
+            "model_version": version,
             "model_algorithm": algorithm,
             "model_r2_score": r2_score,
             "model_stage": "Production",
@@ -886,9 +952,9 @@ async def health_check():
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "model": {
-                "status": model_status,
-                "version": model_version if model_version else None,
-                "name": MODEL_NAME
+                "status": "multi_user",
+                "note": "Each user has their own model namespace"
+                
             },
             "system": {
                 "platform": platform.system(),
@@ -927,10 +993,13 @@ async def health_check():
     tags=["🎯 Predictions"],
     summary="Get features for Production model",
 )
-async def get_production_features():
+async def get_production_features(user_id: int = Depends(get_current_user_id) ):
     """
     Get features required by Production model.
+    
     """
+    MODEL_NAME = get_model_name(user_id)
+
     try:
         client = MlflowClient()
         
@@ -1024,11 +1093,13 @@ async def get_production_features():
     tags=["📦 Model Management"],
     summary="Get feature names for a model version",
 )
-async def get_model_features(version: int):
+async def get_model_features(version: int , user_id: int = Depends(get_current_user_id)):
     """
     Get the list of features required by a specific model version.
     """
+    
     try:
+        MODEL_NAME = get_model_name(user_id)
         client = MlflowClient()
         
         # Get model version
@@ -1083,3 +1154,139 @@ async def get_model_features(version: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post(
+    "/api/predict",
+    tags=["🔑 Public API"],
+    summary="Public prediction endpoint (API key auth)"
+)
+async def api_predict(
+    request: DynamicPredictionRequest,
+    user_id: int = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    **PUBLIC ENDPOINT** - Authenticate with API key
+    
+    Usage:
+```bash
+    curl -X POST http://your-domain.com/api/predict \
+      -H "X-API-Key: your_api_key_here" \
+      -H "Content-Type: application/json" \
+      -d '{"features": {"feature1": 10, "feature2": "value"}}'
+```
+    """
+    
+    MODEL_NAME = get_model_name(user_id)
+    
+    try:
+        client = MlflowClient()
+        prod_versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+        
+        if not prod_versions:
+            raise HTTPException(404, "No Production model found")
+        
+        version = int(prod_versions[0].version)
+        run_id = prod_versions[0].run_id
+        
+        # Load metadata
+        local_dir = tempfile.mkdtemp()
+        local_path = client.download_artifacts(run_id, "feature_metadata.json", dst_path=local_dir)
+        
+        with open(local_path, 'r') as f:
+            meta = json.load(f)
+        
+        # Validate features
+        expected = set(meta['features'])
+        incoming = set(request.features.keys())
+        
+        if missing := expected - incoming:
+            raise HTTPException(400, {"missing_features": list(missing)})
+        
+        # Load & predict
+        model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/Production")
+        df = pd.DataFrame([{f: request.features[f] for f in meta['features']}])
+        prediction = model.predict(df)[0]
+        
+        # 🔥 Log usage
+        api_key_record = db.query(models.APIKey).filter(
+            models.APIKey.user_id == user_id
+        ).first()
+        
+        usage = APIUsage(
+            user_id=user_id,
+            api_key_id=api_key_record.id,
+            endpoint="/api/predict",
+            model_version=version
+        )
+        db.add(usage)
+        db.commit()
+        
+        return {
+            "prediction": float(prediction),
+            "model_version": version,
+            "credits_used": 1
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+
+@app.get(
+    "/api/keys",
+    tags=["🔑 Public API"],
+    summary="Get your API keys"
+)
+async def get_api_keys(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    """Get all API keys for logged-in user"""
+    
+    keys = db.query(models.APIKey).filter(
+        models.APIKey.user_id == user_id
+    ).all()
+    
+    return {
+        "api_keys": [
+            {
+                "id": k.id,
+                "key": k.key,
+                "created_at": k.created_at
+            }
+            for k in keys
+        ]
+    }
+
+@app.get(
+    "/api/usage",
+    tags=["🔑 Public API"],
+    summary="Get API usage stats"
+)
+async def get_api_usage(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    """Get usage statistics"""
+    
+    total_calls = db.query(APIUsage).filter(
+        APIUsage.user_id == user_id
+    ).count()
+    
+    recent = db.query(APIUsage).filter(
+        APIUsage.user_id == user_id
+    ).order_by(APIUsage.timestamp.desc()).limit(10).all()
+    
+    return {
+        "total_calls": total_calls,
+        "recent_calls": [
+            {
+                "endpoint": u.endpoint,
+                "model_version": u.model_version,
+                "timestamp": u.timestamp
+            }
+            for u in recent
+        ]
+    }
