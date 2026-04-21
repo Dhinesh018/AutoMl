@@ -100,7 +100,12 @@ Upload Dataset → LLM Analyzes & Selects Models → Train Subset
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Frontend URL
+    allow_origins=[
+        "http://localhost:5173",
+        "https://*.railway.app",  # Railway frontend
+        "https://*.onrender.com",  # Render frontend
+        "*"  # Allow all for now (fix after deployment)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
