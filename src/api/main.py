@@ -102,9 +102,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://*.railway.app",  # Railway frontend
-        "https://*.onrender.com",  # Render frontend
-        "*"  # Allow all for now (fix after deployment)
+        "https://your-frontend-name.up.railway.app", # Your specific Railway URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
