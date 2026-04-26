@@ -11,7 +11,7 @@ COPY . .
 
 RUN mkdir -p /app/data/uploads /mlflow
 
-EXPOSE 8080
+EXPOSE 8000
 
-# Use shell to expand PORT variable
-CMD sh -c "uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"
+# Railway sets PORT dynamically - use it!
+CMD sh -c "uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"
