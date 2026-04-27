@@ -8,24 +8,29 @@ const LoginPage = ({ onLogin }) => {
   const [error, setError] = useState(null)
 
   const handleSubmit = async (e) => {
-    e.preventDefault()
-    setError(null)
+  e.preventDefault();
+  setError('');
+  
+  try {
+    const endpoint = isLogin ? '/auth/login' : '/auth/signup';
+    const response = await api.post(endpoint, { email, password });
     
-    try {
-      const endpoint = isSignup ? '/auth/signup' : '/auth/login'
-      const response = await api.post(endpoint, { email, password })
-      
-      // Save token
-      localStorage.setItem('token', response.data.access_token)
-      
-      // Set auth header
-      api.defaults.headers.common['Authorization'] = `Bearer ${response.data.access_token}`
-      
-      onLogin()
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Authentication failed')
+    // ✅ CRITICAL: Save token from response
+    const token = response.data.access_token;  // Backend returns 'access_token'
+    
+    if (token) {
+      localStorage.setItem('token', token);
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      onLogin();  // This triggers parent to setIsAuthenticated(true)
+    } else {
+      setError('No token received');
     }
+    
+  } catch (err) {
+    console.error('Auth error:', err);
+    setError(err.response?.data?.detail || 'Authentication failed');
   }
+};
 
   return (
     <div style={{ maxWidth: '400px', margin: '100px auto', padding: '2rem' }}>
