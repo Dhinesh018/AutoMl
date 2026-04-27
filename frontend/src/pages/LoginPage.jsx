@@ -1,36 +1,39 @@
 import React, { useState } from 'react'
-import  api  from '../utils/api'
+import api from '../utils/api'
 
 const LoginPage = ({ onLogin }) => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [isSignup, setIsSignup] = useState(false)
+  const [isSignup, setIsSignup] = useState(false) // You used 'isSignup' here...
   const [error, setError] = useState(null)
 
   const handleSubmit = async (e) => {
-  e.preventDefault();
-  setError('');
-  
-  try {
-    const endpoint = isLogin ? '/auth/login' : '/auth/signup';
-    const response = await api.post(endpoint, { email, password });
+    e.preventDefault();
+    setError('');
     
-    // ✅ CRITICAL: Save token from response
-    const token = response.data.access_token;  // Backend returns 'access_token'
-    
-    if (token) {
-      localStorage.setItem('token', token);
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      onLogin();  // This triggers parent to setIsAuthenticated(true)
-    } else {
-      setError('No token received');
+    try {
+      // FIX: Use 'isSignup' and flip the logic
+      // If isSignup is true, go to signup. Otherwise, go to login.
+      const endpoint = isSignup ? '/auth/signup' : '/auth/login'; 
+      
+      const response = await api.post(endpoint, { email, password });
+      
+      const token = response.data.access_token;
+      
+      if (token) {
+        localStorage.setItem('token', token);
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        onLogin();
+      } else {
+        setError('No token received');
+      }
+      
+    } catch (err) {
+      console.error('Auth error:', err);
+      // Backend usually sends error in err.response.data.detail
+      setError(err.response?.data?.detail || 'Authentication failed');
     }
-    
-  } catch (err) {
-    console.error('Auth error:', err);
-    setError(err.response?.data?.detail || 'Authentication failed');
-  }
-};
+  };
 
   return (
     <div style={{ maxWidth: '400px', margin: '100px auto', padding: '2rem' }}>
