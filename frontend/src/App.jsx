@@ -5,13 +5,14 @@ import ModelsPage from './pages/ModelsPage'
 import PredictionPage from './pages/PredictionPage'
 import LoginPage from './pages/LoginPage'
 import api from './utils/api';
-import APIPage from './pages/APIPage'; // 1. Import the APIPage
+import APIPage from './pages/APIPage';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('upload')
   const [uploadedDataset, setUploadedDataset] = useState(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light')
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false) // ✅ MOVED TO TOP!
 
   const handleLogout = () => {
     localStorage.removeItem('token')
@@ -41,6 +42,9 @@ function App() {
     localStorage.setItem('theme', newTheme);
   }
 
+  const toggleMobileMenu = () => setMobileMenuOpen(!mobileMenuOpen);
+
+  // ✅ EARLY RETURN IS NOW SAFE - ALL HOOKS ARE ABOVE IT
   if (!isAuthenticated) {
     return <LoginPage onLogin={() => setIsAuthenticated(true)} />
   }
@@ -52,9 +56,6 @@ function App() {
     { id: 'prediction', label: 'Predict', icon: '✨' },
     { id: 'api', label: 'API Keys', icon: '🔑' },
   ];
-
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const toggleMobileMenu = () => setMobileMenuOpen(!mobileMenuOpen);
 
   return (
     <div style={{
