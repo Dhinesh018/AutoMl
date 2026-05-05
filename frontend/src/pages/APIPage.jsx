@@ -64,7 +64,7 @@ export default function APIPage() {
     setTestResult(null);
     
     try {
-      const res = await fetch('http://localhost:8000/api/predict', {
+      const res = await fetch('/api/predict', {
         method: 'POST',
         headers: {
           'X-API-Key': apiKey,
