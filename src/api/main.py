@@ -102,7 +102,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://automl-assistant-production-6fad.up.railway.app", # Your specific Railway URL
+        "https://adventurous-alignment-production-6fad.up.railway.app", # Your specific Railway URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
