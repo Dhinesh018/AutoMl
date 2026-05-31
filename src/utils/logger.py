@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 import json
+import os
 
 
 class JSONFormatter(logging.Formatter):
@@ -39,6 +40,7 @@ def setup_logger(name: str = "automl_api") -> logging.Logger:
     Setup structured logging
     
     Logs to both console and file
+    Uses /tmp on Render (read-only /app) and ./logs locally
     """
     
     logger = logging.getLogger(name)
@@ -47,9 +49,18 @@ def setup_logger(name: str = "automl_api") -> logging.Logger:
     # Remove existing handlers
     logger.handlers.clear()
     
-    # Create logs directory
-    log_dir = Path("/app/logs")
-    log_dir.mkdir(parents=True, exist_ok=True)
+    # Create logs directory - use /tmp on Render, ./logs locally
+    if os.path.exists("/app"):  # We're on Render
+        log_dir = Path("/tmp/logs")
+    else:  # Local development
+        log_dir = Path("./logs")
+    
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        print(f"✅ Logs directory: {log_dir}")
+    except Exception as e:
+        print(f"⚠️ Could not create logs directory: {e}")
+        log_dir = None
     
     # Console handler (human-readable)
     console_handler = logging.StreamHandler(sys.stdout)
@@ -60,15 +71,22 @@ def setup_logger(name: str = "automl_api") -> logging.Logger:
     )
     console_handler.setFormatter(console_format)
     
-    # File handler (JSON format)
-    log_file = log_dir / f"automl_{datetime.now().strftime('%Y%m%d')}.log"
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(JSONFormatter())
-    
-    # Add handlers
+    # Add console handler
     logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+    
+    # File handler (JSON format) - only if directory was created
+    if log_dir:
+        try:
+            log_file = log_dir / f"automl_{datetime.now().strftime('%Y%m%d')}.log"
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(JSONFormatter())
+            logger.addHandler(file_handler)
+            print(f"✅ File logging to: {log_file}")
+        except Exception as e:
+            print(f"⚠️ Could not setup file logging: {e}")
+    else:
+        print("⚠️ File logging disabled (no writable logs directory)")
     
     return logger
 
