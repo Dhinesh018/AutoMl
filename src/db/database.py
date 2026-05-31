@@ -1,8 +1,17 @@
 import os
 import sys
+from pathlib import Path
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+
+# Load .env file (only on local - Render sets env vars directly)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_FILE = BASE_DIR / ".env"
+if ENV_FILE.exists():
+    load_dotenv(dotenv_path=ENV_FILE, override=True)
+    print(f"✅ Loaded .env from {ENV_FILE}")
 
 def get_url():
     url = os.getenv("DATABASE_URL")
@@ -18,6 +27,8 @@ def get_url():
     # 2. Fix Railway's 'postgres://' prefix for SQLAlchemy compatibility
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
+    
+    print(f"✅ Using database: {url.split('@')[1] if '@' in url else 'localhost'}")
     return url
 
 DATABASE_URL = get_url()
