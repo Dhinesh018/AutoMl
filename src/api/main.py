@@ -100,12 +100,7 @@ Upload Dataset → LLM Analyzes & Selects Models → Train Subset
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://auto-ml-dk.vercel.app",  # Your Vercel frontend
-        "http://localhost:5173",            # Local development
-        "http://localhost:3000",            # Local development
-        "*"                                 # Allow all (for testing)
-    ],
+    allow_origins=["*"],  # ✅ Allow any origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
