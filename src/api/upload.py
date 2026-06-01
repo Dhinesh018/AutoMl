@@ -10,7 +10,7 @@ from src.utils.exceptions import (
     InvalidTargetColumnError
 )
 
-UPLOAD_DIR = Path("/app/data/uploads")
+UPLOAD_DIR = Path("/tmp/uploads")  # ✅ Writable on Render
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
