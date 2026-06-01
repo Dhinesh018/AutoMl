@@ -101,9 +101,10 @@ Upload Dataset → LLM Analyzes & Selects Models → Train Subset
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "https://adventurous-alignment-production-6fad.up.railway.app",
-         "https://auto-ml-dk.vercel.app/" # Your specific Railway URL
+        "https://auto-ml-dk.vercel.app",  # Your Vercel frontend
+        "http://localhost:5173",            # Local development
+        "http://localhost:3000",            # Local development
+        "*"                                 # Allow all (for testing)
     ],
     allow_credentials=True,
     allow_methods=["*"],
