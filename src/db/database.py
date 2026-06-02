@@ -13,13 +13,14 @@ if ENV_FILE.exists():
     load_dotenv(dotenv_path=ENV_FILE, override=True)
 
 def get_url():
+    # Force SQLite fallback or use it by default
     url = os.getenv("DATABASE_URL")
     
-    if not url:
-        print("⚠️ DATABASE_URL not set, using SQLite")
+    if not url or "sqlite" in url:
+        print("⚠️ Using local SQLite database (app.db)")
         return "sqlite:///./app.db"
     
-    # Fix postgres:// prefix
+    # Fix postgres:// prefix if PostgreSQL is ever provided
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
     
@@ -28,13 +29,20 @@ def get_url():
 
 DATABASE_URL = get_url()
 
-# Create engine
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True
-)
+# Create engine conditionally based on database type
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        DATABASE_URL,
+        # Required for SQLite to allow multiple FastAPI threads to talk to it
+        connect_args={"check_same_thread": False}
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

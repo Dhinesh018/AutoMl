@@ -5,7 +5,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["🔐 Authentication"])
+# FIX: Added prefix="/auth" so that endpoints become /auth/signup and /auth/login
+router = APIRouter(prefix="/auth", tags=["🔐 Authentication"])
 
 # Temporary in-memory storage
 USERS_DB = {}
@@ -15,7 +16,7 @@ TOKENS_DB = {}
 def signup(user: schemas.UserCreate):
     """Signup - temporary in-memory storage"""
     try:
-        logger.info(f"🔐 Signup: {user.email}")
+        logger.info(f"🔐 Signup attempt for email: {user.email}")
         
         # Check if user exists
         if user.email in USERS_DB:
@@ -33,7 +34,7 @@ def signup(user: schemas.UserCreate):
         token = secrets.token_urlsafe(32)
         TOKENS_DB[token] = user_id
         
-        logger.info(f"✅ User created: {user.email}")
+        logger.info(f"✅ User created successfully: {user.email}")
         
         return {"access_token": token, "token_type": "bearer"}
     
@@ -47,7 +48,7 @@ def signup(user: schemas.UserCreate):
 def login(user: schemas.UserCreate):
     """Login - temporary in-memory storage"""
     try:
-        logger.info(f"🔓 Login: {user.email}")
+        logger.info(f"🔓 Login attempt for email: {user.email}")
         
         # Find user
         if user.email not in USERS_DB:
